@@ -17,7 +17,8 @@ class LauncherContractTest(unittest.TestCase):
         source = Path(__file__).resolve().parents[1] / 'scripts'
         for name in ('run_object_motion_adapter_v3.sh',
                      'run_object_motion_adapter_v7_offline_tracks.sh',
-                     'run_object_motion_adapter_v8.sh'):
+                     'run_object_motion_adapter_v8.sh',
+                     'run_object_motion_adapter_v9_dense_sampling.sh'):
             shutil.copyfile(source / name, scripts / name)
         (self.root / 'checkpoint.pt').write_text('fixture, never loaded')
         (self.root / 'config.yaml').write_text('{}')
@@ -77,6 +78,36 @@ class LauncherContractTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('model.object_motion.event_context_feature_grad=true', result.stdout)
         self.assertIn('model.object_motion.event_ranking_target=final', result.stdout)
+
+    def test_v9_control_and_dense_have_equal_fixed_budget_and_weights(self):
+        for mode, sampling in [('control', 'legacy_pairs'), ('dense', 'dense_mixed')]:
+            with self.subTest(mode=mode):
+                result = subprocess.run(
+                    ['bash', str(self.root / 'scripts/run_object_motion_adapter_v9_dense_sampling.sh')],
+                    env={**self.env, 'MOTION_V9_MODE': mode}, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = result.stdout.splitlines()
+                self.assertIn('model.object_motion.sampling_mode=' + sampling, lines)
+                self.assertIn('model.object_motion.sampling_batches_per_rank=2016', lines)
+                self.assertIn('model.object_motion.natural_window_fraction=0.5', lines)
+                self.assertIn('train.pos_weight=[1.0,1.0,1.0]', lines)
+                self.assertIn('model.object_motion.image_size=[720,1280]', lines)
+                self.assertEqual(lines[:2], ['TRAIN_REACHED', str(self.root)])
+
+    def test_v9_preflight_and_invalid_mode_prevent_training(self):
+        for overrides in ({'PYTHON_BIN': '/usr/bin/false'}, {'MOTION_V9_MODE': 'typo'},
+                          {'MOTION_POS_WEIGHT': 'auto'}):
+            with self.subTest(overrides=overrides):
+                result = subprocess.run(
+                    ['bash', str(self.root / 'scripts/run_object_motion_adapter_v9_dense_sampling.sh')],
+                    env={**self.env, **overrides}, capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('TRAIN_REACHED', result.stdout)
+
+    def test_legacy_launcher_does_not_override_inherited_positive_weights(self):
+        result = self.launch('grad')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(line.startswith('train.pos_weight=') for line in result.stdout.splitlines()))
 
 
 if __name__ == '__main__':

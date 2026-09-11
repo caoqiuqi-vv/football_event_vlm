@@ -1,5 +1,12 @@
 # Object Motion Evidence Adapter
 
+## v9 dense-window sampling experiment
+
+See [v9 sampling and A/B instructions](../docs/football_object_motion_v9_sampling.md).
+The opt-in dense sampler exposes the full training-video scan grid, retains
+reviewed pairs as a separate stream, and uses identical per-rank budgets for
+control/dense runs. Legacy launchers retain their existing sampling defaults.
+
 ## v8 experimental event-gradient repair
 
 See [v8 review and experiment instructions](../docs/football_object_motion_v8_review.md).

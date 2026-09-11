@@ -84,6 +84,10 @@ def validate_same_video_pairs(
     pairs = 0
     for index in range(0, len(metas), 2):
         positive, negative = metas[index], metas[index + 1]
+        if skip_unusable_supervision and (
+            not positive.get("pair_usable", True) or not negative.get("pair_usable", True)
+        ):
+            continue
         class_index = int(positive.get("relation_class_index", -1))
         metadata_legal = (
             class_index >= 0 and class_index < targets.shape[1]
@@ -194,14 +198,42 @@ def _queued_pairwise_ranking(
     )
 
 def _validated_pairwise_ranking(residual: Tensor, targets: Tensor, masks: Tensor, metas: list[dict[str, Any]], *, margin: float, temperature: float, min_gap_sec: float) -> tuple[Tensor, int]:
-    count = validate_same_video_pairs(metas, targets, masks, min_gap_sec=min_gap_sec)
     scale = max(float(temperature), 1e-3)
     losses = []
+    if len(metas) != residual.shape[0] or len(metas) % 2:
+        raise ValueError("pair ranking requires complete metadata-aligned pairs")
     for index in range(0, len(metas), 2):
+        count = validate_same_video_pairs(
+            metas[index:index + 2], targets[index:index + 2], masks[index:index + 2],
+            min_gap_sec=min_gap_sec, skip_unusable_supervision=True,
+        )
+        if not count:
+            continue
         class_index = int(metas[index]["relation_class_index"])
         difference = residual[index, class_index] - residual[index + 1, class_index]
         losses.append(F.softplus((float(margin) - difference) / scale) * scale)
-    return torch.stack(losses).mean(), count
+    return (torch.stack(losses).mean(), len(losses)) if losses else (residual.sum() * 0.0, 0)
+
+
+def motion_pair_ranking(scores: Tensor, targets: Tensor, masks: Tensor, metas: list[dict[str, Any]], cfg: Any) -> tuple[Tensor, int]:
+    """Keep reviewed-pair queue state out of ordinary/validation batches."""
+    if len(metas) != scores.shape[0] or not metas:
+        raise ValueError("ranking metadata must match the nonempty microbatch")
+    pair_flags = [bool(meta.get("pair_id")) for meta in metas]
+    if any(pair_flags) and not all(pair_flags):
+        raise ValueError("ordinary windows and reviewed pairs must use separate microbatches")
+    if not any(pair_flags):
+        reset_pair_residual_queues()
+    require_pairs = bool(cfg.get("require_true_pairs", False))
+    kwargs = dict(margin=float(cfg.get("pairwise_rank_margin", 0.05)),
+                  temperature=float(cfg.get("pairwise_rank_temperature", 0.10)))
+    if require_pairs and all(pair_flags):
+        function = _queued_pairwise_ranking if scores.shape[0] == 1 else _validated_pairwise_ranking
+        return function(scores, targets, masks, metas,
+                        min_gap_sec=float(cfg.get("pair_min_gap_sec", 5.0)), **kwargs)
+    if require_pairs:
+        return scores.sum() * 0.0, 0
+    return _pairwise_residual_ranking(scores, targets, masks, **kwargs)
 
 
 def bidirectional_guard_loss(final: Tensor, anchor: Tensor, targets: Tensor, masks: Tensor, metas: list[dict[str, Any]], *, negative_margin: float = 0.15) -> tuple[Tensor, int, int]:
@@ -570,22 +602,10 @@ def object_motion_auxiliary_loss(
         raise ValueError("event_ranking_target must be residual or final")
     relation_logits = outputs.get("object_motion_raw_clip_residual_logits", ranking_residual)
     relation_loss = balanced_relation_bce(relation_logits, clip_targets, clip_label_masks)
-    if bool(object_cfg.get("require_true_pairs", False)) and batch.get("meta", [{}])[0].get("pair_id"):
-        ranking_function = _queued_pairwise_ranking if ranking_residual.shape[0] == 1 else _validated_pairwise_ranking
-        dense_rank_loss, dense_rank_pair_count = ranking_function(
-            ranking_residual, clip_targets, clip_label_masks, batch.get("meta", []),
-            margin=float(object_cfg.get("pairwise_rank_margin", 0.05)),
-            temperature=float(object_cfg.get("pairwise_rank_temperature", 0.10)),
-            min_gap_sec=float(object_cfg.get("pair_min_gap_sec", 5.0)),
-        )
-    elif bool(object_cfg.get("require_true_pairs", False)):
-        dense_rank_loss, dense_rank_pair_count = ranking_residual.sum() * 0.0, 0
-    else:
-        dense_rank_loss, dense_rank_pair_count = _pairwise_residual_ranking(
-            ranking_residual, clip_targets, clip_label_masks,
-            margin=float(object_cfg.get("pairwise_rank_margin", 0.05)),
-            temperature=float(object_cfg.get("pairwise_rank_temperature", 0.10)),
-        )
+    dense_rank_loss, dense_rank_pair_count = motion_pair_ranking(
+        ranking_residual, clip_targets, clip_label_masks,
+        batch.get("meta", [{} for _ in range(ranking_residual.shape[0])]), object_cfg,
+    )
     anchor_logits = outputs.get("retention_reference_logits", outputs.get("logits", relation_logits).detach())
     final_logits = outputs.get("logits", anchor_logits)
     guard_loss, upward_violations, downward_violations = bidirectional_guard_loss(final_logits, anchor_logits, clip_targets, clip_label_masks, batch.get("meta", [{} for _ in range(final_logits.shape[0])]), negative_margin=float(object_cfg.get("negative_guard_margin", 0.15)))

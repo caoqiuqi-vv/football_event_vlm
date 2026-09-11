@@ -31,7 +31,11 @@ from football_object_motion.ball_backbone import (
     inject_ball_lora,
     validate_trainable_allowlist,
 )
-from football_object_motion.losses import object_motion_auxiliary_loss
+from football_object_motion.losses import object_motion_auxiliary_loss, reset_pair_residual_queues
+from football_object_motion.sampling import (
+    DensePairBatchSampler, annotate_stream_item, build_dense_training_records,
+    resolve_stream_row,
+)
 from football_object_motion.offline_teacher import OfflineTrackedBallTeacher
 from football_object_motion.model import (
     OBJECT_NAMES,
@@ -302,7 +306,7 @@ def _usable_relation_negative(dataset: Dataset, record: Any, class_index: int) -
     )
 
 
-def build_relation_pair_rows(dataset: Dataset, cfg: Any) -> list[dict[str, Any]]:
+def build_relation_pair_rows(dataset: Dataset, cfg: Any, *, allow_empty: bool = False) -> list[dict[str, Any]]:
     motion_cfg = _motion_cfg(cfg)
     paths = [str(value) for value in motion_cfg.get("reviewed_negative_manifests", ())]
     if not paths:
@@ -406,7 +410,7 @@ def build_relation_pair_rows(dataset: Dataset, cfg: Any) -> list[dict[str, Any]]
         rows.append({"base_index": positive_index, "pair_role": "positive", "nearest_same_class_gt_gap": 0.0, **common})
         rows.append({"base_index": negative_index, "pair_role": "negative", "reviewed_negative": True, "full_clean_window": True, "nearest_same_class_gt_gap": nearest_gap, "review_manifest": audit["manifest"], **common})
         pair_count += 1
-    if not rows:
+    if not rows and not allow_empty:
         raise ValueError("relation pairing enabled but reviewed same-video pairs=0")
     return rows
 
@@ -445,10 +449,30 @@ class ObjectMotionDataset(Dataset):
         self.is_train = bool(getattr(dataset, "is_train", False))
         self.sigma = base.frame_label_sigma_seconds(cfg)
         self.ignore_radius = base.frame_label_ignore_radius_seconds(cfg)
-        self.pair_rows = (build_relation_pair_rows(dataset, cfg) if self.is_train and bool(motion_cfg.get("require_true_pairs", False)) else [])
-        self.relation_pair_indices = [(index, index + 1) for index in range(0, len(self.pair_rows), 2)]
+        mode = str(motion_cfg.get("sampling_mode", "legacy_pairs"))
+        if mode not in {"legacy_pairs", "dense_mixed"}:
+            raise ValueError("sampling_mode must be legacy_pairs or dense_mixed")
+        self.mixed_sampling = self.is_train and mode == "dense_mixed"
+        # Capture BEFORE pair synthesis appends aliases' source records.
+        self.natural_count = len(dataset) if self.mixed_sampling else 0
+        if self.mixed_sampling and not all(
+            row.sample_id.startswith("motion_dense_train_") for row in self.records
+        ):
+            raise ValueError("dense_mixed requires the long-video dense training load hook")
+        self.pair_rows = (
+            build_relation_pair_rows(dataset, cfg, allow_empty=self.mixed_sampling)
+            if self.is_train and bool(motion_cfg.get("require_true_pairs", False)) else []
+        )
+        offset = self.natural_count
+        self.relation_pair_indices = [(offset + index, offset + index + 1) for index in range(0, len(self.pair_rows), 2)]
+        if self.mixed_sampling:
+            self.records = list(dataset.records[:self.natural_count]) + [
+                dataset.records[row["base_index"]] for row in self.pair_rows
+            ]
 
     def __len__(self) -> int:
+        if self.mixed_sampling:
+            return self.natural_count + len(self.pair_rows)
         return len(self.pair_rows) if self.pair_rows else len(self.dataset)
 
     def _empty_teacher(self) -> dict[str, Tensor]:
@@ -460,12 +484,19 @@ class ObjectMotionDataset(Dataset):
         }
 
     def __getitem__(self, index: int) -> dict[str, Any]:
-        pair_row = self.pair_rows[int(index)] if self.pair_rows else None
-        item = self.dataset[int(pair_row["base_index"] if pair_row else index)]
+        if self.mixed_sampling or self.pair_rows:
+            base_index, pair_row = resolve_stream_row(
+                index, self.natural_count, self.pair_rows, mixed=self.mixed_sampling
+            )
+        else:
+            base_index, pair_row = int(index), None
+        item = self.dataset[base_index]
+        if self.is_train:
+            item = annotate_stream_item(
+                item, self.dataset.records[base_index], pair_row,
+                stream="pair" if pair_row is not None else "natural",
+            )
         meta = item["meta"]
-        if pair_row is not None:
-            meta.update({key: value for key, value in pair_row.items() if key != "base_index"})
-            meta["sampled_clip_center"] = 0.5 * (float(meta["sampled_clip_start"]) + float(meta["sampled_clip_end"]))
         if bool(meta.get("decode_failed", False)):
             item["object_motion_inputs"] = torch.zeros(
                 self.frames, 3, *self.image_size, dtype=torch.uint8
@@ -595,6 +626,27 @@ def motion_collate(batch: list[dict[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def load_motion_records(cfg: Any, split: str):
+    if split != "train" or str(_motion_cfg(cfg).get("sampling_mode", "legacy_pairs")) != "dense_mixed":
+        return online_e16.online_load(cfg, split)
+    # Expand the original TRAIN source inventory, before E1.6's event-biased
+    # subsampling can omit a background-only video. Evaluation remains intact.
+    records, events = online_e16._original_load(cfg, split)
+    records = build_dense_training_records(
+        records, events, cfg,
+        grid_builder=online_e16.e13.build_online_eval_records,
+        record_builder=online_e16._e16_record,
+    )
+    print("object_motion_dense_pool " + json.dumps({
+        "windows": len(records),
+        "videos": len({(row.source, row.video_id) for row in records}),
+        "positive_windows": [sum(row.labels[c] > 0.5 for row in records) for c in range(len(base.LABELS))],
+        "valid_negative_windows": [sum(row.labels[c] <= 0.5 and row.label_mask[c] > 0 and row.online_clip_loss_weights[c] > 0 for row in records) for c in range(len(base.LABELS))],
+        "masked_windows": [sum(row.label_mask[c] <= 0 or row.online_clip_loss_weights[c] <= 0 for row in records) for c in range(len(base.LABELS))],
+    }, sort_keys=True), flush=True)
+    return records, events
+
+
 def prepare_motion_datasets(
     cfg: Any, *, use_cache: bool
 ) -> tuple[Dataset, Dataset, list[Any], list[Any]]:
@@ -627,16 +679,34 @@ class _PairLoaderView:
 
 def make_motion_loader(dataset: Dataset, cfg: Any, *, is_train: bool, batch_size: int | None = None, distributed: bool = False) -> DataLoader:
     motion_cfg = _motion_cfg(cfg)
-    if not is_train or not bool(motion_cfg.get("require_true_pairs", False)):
+    mixed = bool(getattr(dataset, "mixed_sampling", False))
+    budget = int(motion_cfg.get("sampling_batches_per_rank", 0))
+    if not is_train or (not mixed and not bool(motion_cfg.get("require_true_pairs", False))):
         return _ORIGINAL_MAKE_LOADER(dataset, cfg, is_train=is_train, batch_size=batch_size, distributed=distributed)
     local_batch_size = int(batch_size or cfg.train.batch_size)
     if local_batch_size not in (1, 2):
         raise ValueError(f"true relation pairing requires per-rank batch_size 1 or 2, got {local_batch_size}")
     pairs = list(getattr(dataset, "relation_pair_indices", ()))
-    rank = base.dist.get_rank() if distributed and base.distributed_training_active() else 0
-    world_size = base.dist.get_world_size() if distributed and base.distributed_training_active() else 1
-    sampler_type = SameVideoPairQueueBatchSampler if local_batch_size == 1 else SameVideoPairBatchSampler
-    batch_sampler = sampler_type(pairs, rank=rank, world_size=world_size, seed=int(cfg.get("seed", 42)))
+    if distributed and not base.distributed_training_active():
+        raise RuntimeError("distributed motion loader requires an initialized process group")
+    rank = base.dist.get_rank() if distributed else 0
+    world_size = base.dist.get_world_size() if distributed else 1
+    if mixed or budget > 0:
+        accumulation = int(cfg.train.get("grad_accum_steps", 1))
+        if accumulation <= 0 or budget % accumulation:
+            raise ValueError("sampling batch budget must be divisible by grad_accum_steps")
+        if pairs and local_batch_size == 1 and accumulation % 2:
+            raise ValueError("batch-one reviewed pairs require even grad_accum_steps")
+        batch_sampler = DensePairBatchSampler(
+            int(getattr(dataset, "natural_count", 0)), pairs,
+            batches_per_rank=budget, batch_size=local_batch_size,
+            natural_fraction=float(motion_cfg.get("natural_window_fraction", 0.5)) if mixed else 0.0,
+            rank=rank, world_size=world_size, seed=int(cfg.get("seed", 42)),
+            on_epoch=reset_pair_residual_queues, report=(rank == 0),
+        )
+    else:
+        sampler_type = SameVideoPairQueueBatchSampler if local_batch_size == 1 else SameVideoPairBatchSampler
+        batch_sampler = sampler_type(pairs, rank=rank, world_size=world_size, seed=int(cfg.get("seed", 42)))
     generator = torch.Generator().manual_seed(int(cfg.get("seed", 42)) + rank * 100003)
     workers = int(cfg.data.num_workers)
     kwargs: dict[str, Any] = {"batch_sampler": batch_sampler, "num_workers": workers, "pin_memory": bool(cfg.data.pin_memory), "collate_fn": motion_collate, "generator": generator}
@@ -1186,10 +1256,9 @@ def build_motion_optimizer(model: nn.Module, cfg: Any) -> torch.optim.Optimizer:
     return optimizer
 
 def install_hooks() -> None:
-    # Use E1.6's exact canonical + both covering stride-5 windows and safe
-    # context labels, but retain the ordinary DistributedSampler so a
-    # high-resolution per-rank batch of one is legal.
-    base.load_long_video_records = online_e16.online_load
+    # Preserve E1.6 in legacy mode; dense_mixed expands the training grid and
+    # uses a fixed-budget sampler compatible with high-resolution batch one.
+    base.load_long_video_records = load_motion_records
     base.FootballLongVideoDataset._sample_window = online_e16.e13.exact_online_window
     base.make_model = make_motion_model
     base.prepare_datasets = prepare_motion_datasets

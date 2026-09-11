@@ -71,6 +71,11 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
 
+extra_overrides=()
+if [[ -n "${MOTION_POS_WEIGHT:-}" ]]; then
+  extra_overrides+=("train.pos_weight=${MOTION_POS_WEIGHT}")
+fi
+
 "${torchrun_bin}" --standalone --nproc-per-node="${gpu_count}" \
   -m football_object_motion.train \
   --config "${base_config}" \
@@ -135,6 +140,9 @@ export PYTHONUNBUFFERED=1
   "model.object_motion.pairwise_rank_margin=0.05" \
   "model.object_motion.pairwise_rank_temperature=0.10" \
   "model.object_motion.require_true_pairs=true" \
+  "model.object_motion.sampling_mode=${MOTION_SAMPLING_MODE:-legacy_pairs}" \
+  "model.object_motion.sampling_batches_per_rank=${MOTION_SAMPLING_BATCHES_PER_RANK:-0}" \
+  "model.object_motion.natural_window_fraction=${MOTION_NATURAL_WINDOW_FRACTION:-0.5}" \
   "model.object_motion.reviewed_negative_manifests=[${repo_dir}/outputs/football_hard_negatives/reviewed_mid_score_v2_shot_save_setpiece.json,${repo_dir}/outputs/football_hard_negatives/other_action_reviewed_train_shot_save_score_filtered.json]" \
   "model.object_motion.pair_min_gap_sec=5.0" \
   "model.object_motion.negative_guard_margin=0.15" \
@@ -239,4 +247,5 @@ export PYTHONUNBUFFERED=1
   "eval.online_validation.tuned_min_recall_by_class.shot=0.90" \
   "eval.online_validation.tuned_min_recall_by_class.save=0.85" \
   "eval.online_validation.tuned_min_recall_by_class.set_piece=0.85" \
+  "${extra_overrides[@]}" \
   2>&1 | tee -a "${output_dir}/train_console.log"
