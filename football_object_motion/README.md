@@ -1,5 +1,13 @@
 # Object Motion Evidence Adapter
 
+## v8 experimental event-gradient repair
+
+See [v8 review and experiment instructions](../docs/football_object_motion_v8_review.md).
+`scripts/run_object_motion_adapter_v8.sh` defaults to a gradient-only ablation;
+context readout and frame correction are explicit separate modes. Legacy flags
+remain off by default. Tensor tests must pass on the training host; no event
+metric improvement or real-DINO CUDA validation is claimed by this change.
+
 This directory isolates the detector-distilled high-frame-rate branch from the
 legacy football training implementation.
 

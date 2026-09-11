@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_dir="/home/new_users/qiuqi/code/dinov3-main"
+repo_dir="${FOOTBALL_REPO_DIR:-/home/new_users/qiuqi/code/dinov3-main}"
 v4_dir="${repo_dir}/outputs/football_events/vitl16_d7c_object_motion_v4_causal33_720p_aux025_4gpu_from_object_e2_20260903"
 offline_index_default="/mnt/data_7t/qiuqi/football_ball_pseudolabels/yolo_fulltrack_v2_test18heldout/offline_index_v1"
 
@@ -64,4 +64,4 @@ if [[ ! -s "${MOTION_OFFLINE_BALL_INDEX_ROOT}/manifest.json" ]]; then
   exit 66
 fi
 
-exec "${repo_dir}/scripts/run_object_motion_adapter_v3.sh" "$@"
+exec bash "${repo_dir}/scripts/run_object_motion_adapter_v3.sh" "$@"

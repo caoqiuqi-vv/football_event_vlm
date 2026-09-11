@@ -162,7 +162,7 @@ def _initialize_motion_adapter(
         if key.startswith(prefix)
     }
     if motion_state:
-        missing, unexpected = adapter.load_state_dict(motion_state, strict=False)
+        missing, unexpected = adapter.load_experiment_state_dict(motion_state)
         print(
             f"Loaded object-motion adapter from {checkpoint_path}: "
             f"tensors={len(motion_state)} missing={len(missing)} "
@@ -778,6 +778,10 @@ def _motion_forward(
         if bool(motion_cfg.get("legacy_frame_residual_enabled", True))
         else torch.zeros_like(adapter_frame_residual)
     )
+    if object_fusion is not None and "frame_correction" in object_fusion:
+        # One frame correction path, never add the legacy residual a second time.
+        adapter_frame_residual = object_fusion["frame_correction"]
+        applied_frame_residual = adapter_frame_residual * event_residual_scale
     final_logits = anchor_logits + gated_clip_residual
     anchor_on_motion = interpolate_motion_residual(
         anchor_frame_logits, global_times, motion_times
@@ -819,7 +823,11 @@ def _motion_forward(
             "object_motion_learned_clip_gate": motion["learned_clip_gate"],
             "object_motion_frame_gate": motion["frame_gate"],
             "object_motion_clip_gate": motion["clip_gate"],
-            "object_motion_raw_frame_residual": motion["raw_frame_residual"],
+            "object_motion_raw_frame_residual": (
+                object_fusion["raw_frame_delta"]
+                if object_fusion is not None and "raw_frame_delta" in object_fusion
+                else motion["raw_frame_residual"]
+            ),
             "object_motion_raw_clip_residual_logits": (
                 object_fusion["raw_delta"]
                 if object_fusion is not None
@@ -852,6 +860,10 @@ def _motion_forward(
                 "object_motion_clip_gate": object_fusion["gate"],
             }
         )
+        if "frame_correction" in object_fusion:
+            frame_gate = object_fusion["gate"].unsqueeze(1).expand_as(adapter_frame_residual)
+            result["object_motion_learned_frame_gate"] = frame_gate
+            result["object_motion_frame_gate"] = frame_gate
     return result if return_aux else final_logits
 
 
@@ -926,6 +938,11 @@ def make_motion_model(
         object_cross_attention_gate_init=float(
             motion_cfg.get("object_cross_attention_gate_init", 0.25)
         ),
+        event_relation_grad_enabled=bool(motion_cfg.get("event_relation_grad_enabled", False)),
+        event_context_enabled=bool(motion_cfg.get("event_context_enabled", False)),
+        event_context_feature_grad=bool(motion_cfg.get("event_context_feature_grad", False)),
+        event_context_uniform=bool(motion_cfg.get("event_context_uniform", False)),
+        event_frame_fusion_enabled=bool(motion_cfg.get("event_frame_fusion_enabled", False)),
     )
     injected = inject_ball_lora(
         model.backbone,

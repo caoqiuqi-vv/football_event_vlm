@@ -69,6 +69,35 @@ def _gather_sparse_tokens(
     return pooled, dense
 
 
+class ObjectContextReadout(nn.Module):
+    """Detector selects regions; event supervision learns their representation."""
+
+    def __init__(self, dim: int, *, feature_grad: bool = False, uniform: bool = False):
+        super().__init__()
+        self.feature_grad = feature_grad
+        self.uniform = uniform
+        self.projection = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, dim), nn.GELU())
+
+    def forward(self, features: Tensor, sparse: Tensor, grid_h: int, grid_w: int) -> Tensor:
+        # Stop coordinate/routing gradients, not the event projection gradient.
+        weights = sparse[..., :2].detach()
+        ball = weights[..., 0]
+        maps = [ball, weights[..., 1]]
+        for kernel in (3, 7):
+            expanded = F.max_pool2d(
+                ball.reshape(-1, 1, grid_h, grid_w), kernel,
+                stride=1, padding=kernel // 2,
+            ).reshape_as(ball)
+            maps.append(expanded)
+        weights = torch.stack(maps, dim=-1)
+        if self.uniform:
+            weights = torch.ones_like(weights)
+        weights = weights / weights.sum(dim=2, keepdim=True).clamp_min(1e-6)
+        # Project AFTER pooling: avoids materializing another [B,T,P,D] map.
+        values = features if self.feature_grad else features.detach()
+        return self.projection(torch.einsum('btpk,btpd->btkd', weights, values))
+
+
 class ObjectTokenCrossAttentionFusion(nn.Module):
     """Condition frozen event semantics on detached ball/goal evidence.
 
@@ -86,12 +115,30 @@ class ObjectTokenCrossAttentionFusion(nn.Module):
         dropout: float,
         max_delta: float,
         gate_init: float,
+        relation_grad: bool = False,
+        context_enabled: bool = False,
+        frame_enabled: bool = False,
+        frame_max_delta: float = 0.15,
     ) -> None:
         super().__init__()
         if hidden_dim % num_heads:
             raise ValueError("object-token fusion hidden_dim must divide num_heads")
         self.num_labels = int(num_labels)
         self.max_delta = max(float(max_delta), 1e-4)
+        self.relation_grad = bool(relation_grad)
+        self.context_enabled = bool(context_enabled)
+        self.frame_enabled = bool(frame_enabled)
+        self.frame_max_delta = max(float(frame_max_delta), 1e-4)
+        if self.context_enabled:
+            self.object_type_embedding = nn.Parameter(torch.zeros(1, 1, 4, hidden_dim))
+            nn.init.normal_(self.object_type_embedding, std=0.02)
+            self.object_time_projection = nn.Linear(3, hidden_dim)
+        if self.frame_enabled:
+            self.frame_delta_head = nn.Sequential(
+                nn.LayerNorm(hidden_dim * 3), nn.Linear(hidden_dim * 3, hidden_dim),
+                nn.GELU(), nn.Linear(hidden_dim, num_labels),
+            )
+            _zero_last_linear(self.frame_delta_head)
         self.object_projection = nn.Sequential(
             nn.LayerNorm(object_dim),
             nn.Linear(object_dim, hidden_dim),
@@ -143,6 +190,7 @@ class ObjectTokenCrossAttentionFusion(nn.Module):
         object_tokens: Tensor,
         relation_tokens: Tensor,
         visibility: Tensor,
+        frame_times: Tensor | None = None,
     ) -> dict[str, Tensor]:
         if global_event_token.ndim == 2:
             global_tokens = global_event_token.unsqueeze(1).expand(
@@ -157,23 +205,35 @@ class ObjectTokenCrossAttentionFusion(nn.Module):
             raise ValueError(
                 "global event token must be [B,H] or [B,C,H]"
             )
-        if object_tokens.ndim != 4 or object_tokens.shape[2] != 2:
-            raise ValueError("object tokens must be [B,T,2,D] for ball/goal")
+        expected_objects = 4 if self.context_enabled else 2
+        if object_tokens.ndim != 4 or object_tokens.shape[2] != expected_objects:
+            raise ValueError(f"object tokens must be [B,T,{expected_objects},D]")
         if visibility.shape != object_tokens.shape[:3]:
-            raise ValueError("object visibility must match [B,T,2]")
+            raise ValueError(f"object visibility must match [B,T,{expected_objects}]")
         if relation_tokens.shape[:2] != object_tokens.shape[:2]:
             raise ValueError("relation tokens must match object time axis")
 
         # This boundary is deliberate: event labels learn how to consume
         # detector evidence, not how to redraw detector heatmaps.
-        detached_objects = object_tokens.detach()
+        detached_objects = object_tokens if self.context_enabled else object_tokens.detach()
         detached_visibility = visibility.detach().clamp(0.0, 1.0)
-        detached_relations = relation_tokens.detach()
+        detached_relations = relation_tokens if self.relation_grad else relation_tokens.detach()
         object_evidence = self.object_projection(detached_objects)
         object_evidence = object_evidence + self.visibility_projection(
             detached_visibility.unsqueeze(-1)
         )
         batch, frames, objects, hidden = object_evidence.shape
+        if self.context_enabled:
+            if frame_times is None or frame_times.shape != (batch, frames):
+                raise ValueError("context fusion needs aligned absolute frame times [B,T]")
+            duration = (frame_times.amax(1, keepdim=True) - frame_times.amin(1, keepdim=True)).clamp_min(1e-3)
+            time = (frame_times - frame_times.mean(1, keepdim=True)) / duration
+            time_features = torch.stack((time, time.square(), torch.sin(math.pi * time)), dim=-1)
+            object_evidence = object_evidence + self.object_type_embedding.to(object_evidence.dtype)
+            object_evidence = object_evidence + self.object_time_projection(
+                time_features.to(object_evidence.dtype)
+            ).unsqueeze(2)
+        frame_object_evidence = object_evidence.mean(dim=2)
         object_evidence = object_evidence.reshape(
             batch, frames * objects, hidden
         )
@@ -188,7 +248,7 @@ class ObjectTokenCrossAttentionFusion(nn.Module):
             average_attn_weights=False,
         )
         attended = self.output_norm(attended)
-        visibility_summary = detached_visibility.amax(dim=1)
+        visibility_summary = detached_visibility[..., :2].amax(dim=1)
         fusion = torch.cat(
             (
                 global_tokens,
@@ -204,13 +264,22 @@ class ObjectTokenCrossAttentionFusion(nn.Module):
         raw_delta = self.delta_head(fusion).squeeze(-1)
         gate = self.gate_head(fusion).squeeze(-1).sigmoid()
         correction = gate * self.max_delta * torch.tanh(raw_delta)
-        return {
+        result = {
             "correction": correction,
             "raw_delta": raw_delta,
             "gate": gate,
             "attention": attention.mean(dim=1),
             "attended_tokens": attended,
         }
+        if self.frame_enabled:
+            frame_input = torch.cat((
+                global_tokens.mean(dim=1).unsqueeze(1).expand(-1, frames, -1),
+                frame_object_evidence, relation_evidence,
+            ), dim=-1)
+            raw_frame_delta = self.frame_delta_head(frame_input)
+            result["raw_frame_delta"] = raw_frame_delta
+            result["frame_correction"] = gate.unsqueeze(1) * self.frame_max_delta * raw_frame_delta.tanh()
+        return result
 
 
 class ObjectMotionEvidenceAdapter(nn.Module):
@@ -252,6 +321,11 @@ class ObjectMotionEvidenceAdapter(nn.Module):
         object_cross_attention_enabled: bool = False,
         object_cross_attention_max_delta: float = 0.35,
         object_cross_attention_gate_init: float = 0.25,
+        event_relation_grad_enabled: bool = False,
+        event_context_enabled: bool = False,
+        event_context_feature_grad: bool = False,
+        event_context_uniform: bool = False,
+        event_frame_fusion_enabled: bool = False,
     ) -> None:
         super().__init__()
         if len(topk_ratios) != len(OBJECT_NAMES):
@@ -417,6 +491,12 @@ class ObjectMotionEvidenceAdapter(nn.Module):
         self.object_cross_attention_enabled = bool(
             object_cross_attention_enabled
         )
+        if (event_context_enabled or event_frame_fusion_enabled or event_relation_grad_enabled) and not self.object_cross_attention_enabled:
+            raise ValueError("event fusion options require object_cross_attention_enabled")
+        self.event_context = (
+            ObjectContextReadout(patch_dim, feature_grad=event_context_feature_grad, uniform=event_context_uniform)
+            if event_context_enabled else None
+        )
         self.object_cross_attention: ObjectTokenCrossAttentionFusion | None = None
         if self.object_cross_attention_enabled:
             self.object_cross_attention = ObjectTokenCrossAttentionFusion(
@@ -427,6 +507,10 @@ class ObjectMotionEvidenceAdapter(nn.Module):
                 dropout=dropout,
                 max_delta=object_cross_attention_max_delta,
                 gate_init=object_cross_attention_gate_init,
+                relation_grad=event_relation_grad_enabled,
+                context_enabled=event_context_enabled,
+                frame_enabled=event_frame_fusion_enabled,
+                frame_max_delta=self.frame_residual_max_delta,
             )
 
     @staticmethod
@@ -439,6 +523,19 @@ class ObjectMotionEvidenceAdapter(nn.Module):
             indexing="ij",
         )
         return torch.stack((xx, yy), dim=-1).reshape(grid_h * grid_w, 2)
+
+    def load_experiment_state_dict(self, state: dict[str, Tensor]):
+        """Warm-start old detectors without applying a trained head to new tokens.
+
+        Full context checkpoints resume unchanged. Grad-only mode retains every
+        legacy tensor, so the forward function is identical before training.
+        """
+        if self.event_context is not None and not any(
+            key.startswith("event_context.") for key in state
+        ):
+            state = {key: value for key, value in state.items()
+                     if not key.startswith("object_cross_attention.")}
+        return self.load_state_dict(state, strict=False)
 
     @staticmethod
     def _weighted_position(weights: Tensor, grid: Tensor) -> tuple[Tensor, Tensor]:
@@ -778,7 +875,7 @@ class ObjectMotionEvidenceAdapter(nn.Module):
         clip_gate = clip_gate * clip_evidence_gate
         frame_residual = frame_gate * min(self.relation_delta, self.frame_residual_max_delta) * torch.tanh(raw_frame_residual)
         clip_residual = clip_gate * min(self.relation_delta, self.clip_residual_max_delta) * torch.tanh(raw_clip_residual)
-        return {
+        result = {
             "heatmap_logits": heatmap_logits,
             "ball_lora_logits": ball_logits,
             "ball_student_features": ball_detection_features,
@@ -807,7 +904,13 @@ class ObjectMotionEvidenceAdapter(nn.Module):
             "raw_clip_residual": raw_clip_residual,
             "clip_residual": clip_residual,
             "temporal_tokens": temporal_tokens,
+            "frame_times": frame_times,
         }
+        if self.event_context is not None:
+            result["event_context_tokens"] = self.event_context(
+                patch_tokens, result["sparse_attention"], grid_h, grid_w
+            )
+        return result
 
     def fuse_global_event(
         self,
@@ -816,11 +919,16 @@ class ObjectMotionEvidenceAdapter(nn.Module):
     ) -> dict[str, Tensor]:
         if not self.object_cross_attention_enabled or self.object_cross_attention is None:
             raise RuntimeError("object-token cross-attention fusion is disabled")
+        tokens = motion_outputs.get("event_context_tokens", motion_outputs["object_tokens"])
+        visibility = motion_outputs["object_visibility"]
+        if self.event_context is not None:
+            visibility = torch.cat((visibility, visibility[..., :1].expand(-1, -1, 2)), dim=-1)
         return self.object_cross_attention(
             global_event_token,
-            motion_outputs["object_tokens"],
+            tokens,
             motion_outputs["temporal_tokens"],
-            motion_outputs["object_visibility"],
+            visibility,
+            motion_outputs["frame_times"],
         )
 
 

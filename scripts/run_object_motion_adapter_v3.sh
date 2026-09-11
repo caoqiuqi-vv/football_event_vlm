@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_dir="/home/new_users/qiuqi/code/dinov3-main"
+repo_dir="${FOOTBALL_REPO_DIR:-/home/new_users/qiuqi/code/dinov3-main}"
 source_run="${repo_dir}/outputs/football_events/vitl16_d7c_object_teacher_online_allclips_no_bad_media_from_fromlast_e8_20260901"
 source_checkpoint="${SOURCE_CHECKPOINT:-${source_run}/epoch_2.pt}"
 base_config="${BASE_CONFIG:-${source_run}/config.yaml}"
 output_dir="${OUTPUT_DIR:-${repo_dir}/outputs/football_events/vitl16_d7c_object_motion_v3_balllora_fullwindow33_from_object_e2_20260903}"
-python_bin="/home/new_users/qiuqi/miniconda3/envs/qiuqi_sam3/bin/python"
-torchrun_bin="/home/new_users/qiuqi/miniconda3/envs/qiuqi_sam3/bin/torchrun"
+python_bin="${PYTHON_BIN:-/home/new_users/qiuqi/miniconda3/envs/qiuqi_sam3/bin/python}"
+torchrun_bin="${TORCHRUN_BIN:-$(dirname -- "${python_bin}")/torchrun}"
 gpu_list="${GPU_LIST:-1,4,6}"
 per_gpu_batch_size="${PER_GPU_BATCH_SIZE:-1}"
 grad_accum_steps="${GRAD_ACCUM_STEPS:-8}"
@@ -124,6 +124,12 @@ export PYTHONUNBUFFERED=1
   "model.object_motion.evidence_gate_floor=0.02" \
   "model.object_motion.class_evidence_floors=${motion_class_evidence_floors}" \
   "model.object_motion.detach_detector_for_event=true" \
+  "model.object_motion.event_relation_grad_enabled=${MOTION_EVENT_RELATION_GRAD:-false}" \
+  "model.object_motion.event_context_enabled=${MOTION_EVENT_CONTEXT:-false}" \
+  "model.object_motion.event_context_feature_grad=${MOTION_EVENT_CONTEXT_FEATURE_GRAD:-false}" \
+  "model.object_motion.event_context_uniform=${MOTION_EVENT_CONTEXT_UNIFORM:-false}" \
+  "model.object_motion.event_frame_fusion_enabled=${MOTION_EVENT_FRAME_FUSION:-false}" \
+  "model.object_motion.event_ranking_target=${MOTION_EVENT_RANKING_TARGET:-residual}" \
   "model.object_motion.learned_gate_budget=1.0" \
   "model.object_motion.residual_saturation_threshold=0.85" \
   "model.object_motion.pairwise_rank_margin=0.05" \

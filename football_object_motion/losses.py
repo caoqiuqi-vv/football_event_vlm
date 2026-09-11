@@ -362,6 +362,16 @@ def _ball_lora_losses(
         "ball_preserve": preserve,
     }, background_cosine
 
+
+def trusted_no_evidence_mask(targets: Tensor, masks: Tensor) -> Tensor:
+    """Only explicit absence in both ball/goal channels justifies suppression.
+
+    Missing pseudo-labels have mask zero and must never become event negatives.
+    Person is not required because several recipes deliberately omit it.
+    """
+    return ((targets[..., :2] < 0.5) & (masks[..., :2] >= 0.999)).all(dim=-1)
+
+
 def object_motion_auxiliary_loss(
     outputs: dict[str, Tensor],
     batch: dict[str, Any],
@@ -553,6 +563,11 @@ def object_motion_auxiliary_loss(
     ranking_residual = outputs.get(
         "object_motion_adapter_clip_residual", residual
     )
+    ranking_target = str(object_cfg.get("event_ranking_target", "residual"))
+    if ranking_target == "final":
+        ranking_residual = outputs["logits"]
+    elif ranking_target != "residual":
+        raise ValueError("event_ranking_target must be residual or final")
     relation_logits = outputs.get("object_motion_raw_clip_residual_logits", ranking_residual)
     relation_loss = balanced_relation_bce(relation_logits, clip_targets, clip_label_masks)
     if bool(object_cfg.get("require_true_pairs", False)) and batch.get("meta", [{}])[0].get("pair_id"):
@@ -575,7 +590,7 @@ def object_motion_auxiliary_loss(
     final_logits = outputs.get("logits", anchor_logits)
     guard_loss, upward_violations, downward_violations = bidirectional_guard_loss(final_logits, anchor_logits, clip_targets, clip_label_masks, batch.get("meta", [{} for _ in range(final_logits.shape[0])]), negative_margin=float(object_cfg.get("negative_guard_margin", 0.15)))
 
-    no_evidence = (presence_targets.amax(dim=-1) < 0.5).to(residual.dtype)
+    no_evidence = trusted_no_evidence_mask(presence_targets, presence_masks).to(residual.dtype)
     frame_residual = outputs["object_motion_frame_residual"]
     no_evidence_loss = _masked_mean(
         frame_residual.square().mean(dim=-1), no_evidence
