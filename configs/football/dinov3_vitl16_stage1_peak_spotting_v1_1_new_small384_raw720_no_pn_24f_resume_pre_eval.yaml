@@ -1,0 +1,246 @@
+output_dir: outputs/football_events/vitl16_stage1_peak_spotting_v1_1_new_small384_raw720_no_pn_24f
+device: cuda:0
+gpu_ids:
+- 0
+- 1
+- 2
+- 3
+- 4
+- 5
+seed: 42
+deterministic: true
+task:
+  label_schema: set_piece
+data:
+  mode: long_videos
+  long_video:
+    roots:
+    - source: xbotgo_0608
+      videos_dir: /mnt/data_16t/football/raw_video_720P
+      annotations_dir: /mnt/data_16t/football/football_events_human_repair
+    split_files:
+      train:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/train_video_ids.txt
+      val:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/internal_val_video_ids.txt
+    auto_split:
+      enabled: false
+    negative_ratio: 3.0
+    negative_ratio_by_split:
+      train: 3.0
+      val: 2.0
+    negative_per_video: 0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    hard_negative:
+      enabled: false
+      manifest: ''
+      temporal_jitter_sec: 0.25
+      loss_weight: 1.0
+      include_in_val: false
+  num_workers_per_gpu: 2
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+video:
+  num_frames: 24
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 1.0
+  positive_window_strategy: anchor3_7_jitter
+  positive_anchor_min_sec: 3.0
+  positive_anchor_max_sec: 7.0
+  sampling_duration: 10.0
+  sampling_temporal_jitter_sec: 0.0
+  image_size:
+  - 512
+  - 896
+  hflip_prob: 0.5
+spatial_crop:
+  mode: none
+model:
+  backbone: dinov3_vitl16
+  weights: checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+  init_checkpoint: outputs/football_events/vitl16_stage1_peak_spotting_v1_small384_raw720_no_pn_24f/last.pt
+  init_checkpoint_strict: false
+  pretrained: true
+  freeze_backbone: true
+  freeze_loaded_backbone: false
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  frame_feature_mode: multi_layer_cls_patch_attn
+  frame_feature_layers:
+  - -8
+  - -4
+  - -1
+  frame_patch_pool: attn
+  temporal_fusion: temporal_stem_bottleneck_transformer
+  hidden_dim: 384
+  temporal_layers: 2
+  temporal_heads: 6
+  dropout: 0.1
+  gradient_checkpointing: true
+  temporal_stem:
+    kernel_size: 3
+    dilations:
+    - 1
+    - 2
+    - 4
+    bottleneck_frames: 8
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_last_blocks: 6
+    target_modules:
+    - attn.qkv
+    - attn.proj
+    train_norm: false
+  response_curve_primary:
+    enabled: false
+    pooling: topk_lse
+    topk: 3
+    blend_weight: 0.0
+    curve_head: class_specific
+    curve_hidden_dim: 128
+    curve_kernel_size: 5
+    curve_dropout: 0.1
+cache:
+  enabled: false
+train:
+  epochs: 20
+  per_gpu_batch_size: 6
+  grad_accum_steps: 2
+  lr_per_gpu: 1.6666667e-05
+  temporal_lr_per_gpu: 1.6666667e-05
+  head_lr_per_gpu: 3.3333333e-05
+  backbone_lr_per_gpu: 4.1666667e-06
+  weight_decay: 0.05
+  warmup:
+    ratio: 0.05
+  pos_weight:
+  - 1.0
+  - 2.5
+  - 4.0
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 20
+  save_epoch_checkpoints: true
+  save_pre_eval_recovery: true
+  checkpoint_selection: tuned_macro_precision_at_recall_floor
+  checkpoint_min_recall: 0.88
+  early_stopping:
+    enabled: true
+    monitor: selection_score
+    min_epoch: 8
+    patience: 5
+    min_delta: 0.0
+  resume:
+    enabled: true
+    checkpoint: outputs/football_events/vitl16_stage1_peak_spotting_v1_1_new_small384_raw720_no_pn_24f/pre_eval_recovery.pt
+    strict: true
+    load_optimizer: true
+    load_scheduler: true
+    load_scaler: true
+    reset_optimizer_lr: true
+    reset_scheduler: true
+    min_lr_fraction_of_config: 0.1
+    allow_low_lr: false
+  clip_loss_type: bce
+  frame_det_loss_weight: 0.18
+  temporal_clip_loss_weight: 0.0
+  frame_det_loss_type: focal_bce
+  frame_pos_weight:
+    shot: 3.0
+    save: 4.5
+    set_piece: 2.0
+  frame_heatmap_loss_weight: 0.35
+  frame_mil_loss_weight: 0.18
+  frame_rank_loss_weight: 0.12
+  frame_mil_topk: 3
+  frame_eval_topk: 4
+  frame_rank_pos_threshold: 0.5
+  frame_rank_neg_threshold: 0.05
+  frame_rank_margin: 1.25
+  frame_label_sigma_sec:
+    shot: 0.8
+    save: 0.8
+    set_piece: 1.8
+  frame_label_ignore_radius_sec:
+    shot: 4.5
+    save: 4.5
+    set_piece: 6.0
+  frame_loss_class_weight:
+    shot: 1.0
+    save: 0.8
+    set_piece: 0.4
+  response_curve_frame_loss_weight: 0.25
+  response_curve_frame_loss_class_weight:
+    shot: 1.0
+    save: 0.9
+    set_piece: 0.25
+  clean_negative_rank_loss_weight: 0.2
+  clean_negative_rank_branch: fused
+  clean_negative_rank_labels:
+  - shot
+  - save
+  clean_negative_rank_margin: 1.0
+  clean_negative_rank_pairs_per_positive: 2
+  clean_negative_rank_temperature: 1.0
+  clean_negative_rank_require_all_labels: true
+  hard_negative_rank_loss_weight: 0.0
+  online_hard_negative_loss_weight: 0.0
+  online_hard_negative_rank_loss_weight: 0.0
+  clean_positive_logit_margin_loss_weight: 0.1
+  clean_positive_logit_margin:
+    shot: 0.25
+    save: 0.25
+    set_piece: 0.0
+  clean_positive_logit_margin_labels:
+  - shot
+  - save
+  clean_positive_logit_margin_branch: fused
+eval:
+  threshold: 0.5
+  per_gpu_batch_size: 4
+  tuned_min_recall:
+    shot: 0.88
+    save: 0.88
+    set_piece: 0.88
+experiment_notes:
+  purpose: 'V1.1-new calibration/separation experiment. Same small384 temporal-stem
+    architecture as V1; changes only supervision/sampling to avoid low-score ranking:
+    lower clip negative ratio, wider frame ignore radius, stronger positive frame
+    gradients, reduced response-curve dense loss, moderate rank margins, and clean
+    positive absolute logit margin.'
+  train_split: configs/football/splits/thirdparty18_test_long15_val_no_pn_train/train_video_ids.txt
+  threshold_val_split: configs/football/splits/thirdparty18_test_long15_val_no_pn_train/internal_val_video_ids.txt
+  untouched_test_split: configs/football/splits/thirdparty18_test_long15_val_no_pn_train/thirdparty18_test_video_ids.txt
+  long_video_threshold_protocol: val15_window_overlap_threshold_then_external18_fixed
+  no_pseudo_anchor: true
+  no_hard_fp: true
+  no_pn_data: true
+  physical_gpus_for_launch: 2,3,4,5,6,7
+  v1_1_new_changes:
+    negative_ratio_train: 5.0 -> 3.0
+    frame_pos_weight: shot 2.0->3.0, save 3.0->4.5, set_piece 1.5->2.0
+    response_curve_frame_loss_weight: 0.40 -> 0.25
+    frame_rank_loss_weight: 0.08 -> 0.12
+    frame_rank_margin: 1.0 -> 1.25
+    clean_negative_rank_loss_weight: 0.15 -> 0.20
+    clean_negative_rank_margin: 0.75 -> 1.0
+    frame_label_ignore_radius_sec: shot/save 3.0->4.5, set_piece 5.0->6.0
+    clean_positive_logit_margin_loss: new, weight 0.10, shot/save margin 0.25 logit
+  switch_rule: Start after V1 epoch4 if positive_logit remains <0/default recall low/tuned
+    high-recall precision not improved.
+  resume_note: Resumed from pre_eval_recovery.pt after rc=137 at epoch6 pre-eval;
+    eval batch reduced 8->4 and workers 3->2 for stability.

@@ -1,0 +1,31 @@
+{
+  "checkpoint": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_events/vitl16_d7c_fullimage_latest_split_dino_pretrained_lora_ddp_720p_fromlast_e8_20260829/best.pt",
+  "output_dir": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage1/720p_kl_from720best_20260907",
+  "video_root": "/mnt/data_16t/football/raw_video_720P",
+  "ball_index": "/mnt/data_7t/qiuqi/football_ball_pseudolabels/yolo_fulltrack_v2_test18heldout/offline_index_v1",
+  "goal_index": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_object_teacher_indices/dual_teacher_v1",
+  "train_ids": "/home/new_users/qiuqi/code/dinov3-main/configs/football/splits/thirdparty18_test_long15_val_no_pn_train/train_video_ids.txt",
+  "val_ids": "/home/new_users/qiuqi/code/dinov3-main/configs/football/splits/thirdparty18_test_long15_val_no_pn_train/internal_val_video_ids.txt",
+  "test_ids": "/home/new_users/qiuqi/code/dinov3-main/configs/football/splits/thirdparty18_test_long15_val_no_pn_train/thirdparty18_test_video_ids.txt",
+  "excluded_videos": [
+    "1985527741064613890"
+  ],
+  "ball_confidence": 0.5,
+  "goal_confidence": 0.4,
+  "train_frames_per_object_video": 16,
+  "val_frames_per_object_video": 24,
+  "epochs": 3,
+  "warmup_epochs": 1,
+  "batch_size": 2,
+  "workers": 2,
+  "lora_lr": 1e-05,
+  "head_lr": 0.0003,
+  "weight_decay": 0.01,
+  "temperature": 2.0,
+  "patch_kl_weight": 1.0,
+  "cls_kl_weight": 1.0,
+  "min_patch_cosine": 0.98,
+  "min_cls_cosine": 0.98,
+  "seed": 42,
+  "log_interval": 20
+}

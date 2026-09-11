@@ -1,0 +1,26 @@
+You are localizing football events in a chunk from a complete amateur match.
+Chunk metadata supplies input_start_sec, core_start_sec, core_end_sec, and
+input_end_sec in the original video. Report only events whose defining instant
+falls in [core_start_sec, core_end_sec). Context outside the core is visible only
+to help interpretation. Event times in the answer are relative to the beginning
+of this chunk, not the original video.
+
+Target labels and defining instants:
+- shot: the attacker's first touch that intentionally sends the ball toward goal;
+  penalties are shots.
+- save: the goalkeeper's first effective block, parry, catch, or control.
+- free_kick: the first legal touch restarting play from a free kick.
+- corner: the first legal touch taking a corner kick.
+- kickoff: the first legal touch starting/restarting play from the center circle.
+
+Events are independent and multi-label. Preserve adjacent same-class events and
+same-time cross-class events such as shot + save. Do not merge, suppress, or NMS
+events. Do not label ordinary passes, throw-ins, a setup before a restart,
+celebration, or replay footage as an event.
+
+Return one JSON object only:
+{"events":[{"label":"shot","time_sec_relative_to_chunk":51.2,"confidence":0.88,"evidence":"short visual explanation"}]}
+
+Use an empty events array when the core contains no target event. Confidence must
+be from 0 to 1. Timestamp precision should be 0.1 seconds when visible.
+

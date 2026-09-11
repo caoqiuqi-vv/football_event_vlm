@@ -1,0 +1,74 @@
+output_dir: outputs/football_events/vitl16_long_freeze_temporal
+device: cuda:0
+seed: 42
+
+data:
+  mode: long_videos
+  long_video:
+    roots:
+      - source: may_xbotgo
+        videos_dir: /mnt/data/Datasets/Datasets/Football/may/Xbotgo/videos
+        annotations_dir: /mnt/data/Datasets/Datasets/Football/may/Xbotgo/annotations
+      - source: xbotgo_0608
+        videos_dir: /mnt/data/Datasets/Datasets/Football/xbotgo_football_data_0608/videos
+        annotations_dir: /mnt/data/Datasets/Datasets/Football/xbotgo_football_data_0608/annotations
+    split_files:
+      train:
+        - /mnt/data/Datasets/Datasets/Football/video_clips_for_vlm/dataset_v3_with_render/train_videos.txt
+        - /mnt/data/Datasets/Datasets/Football/video_clips_for_vlm/dataset_v4/train_videos.txt
+      val:
+        - /mnt/data/Datasets/Datasets/Football/video_clips_for_vlm/dataset_v3_with_render/val_videos.txt
+        - /mnt/data/Datasets/Datasets/Football/video_clips_for_vlm/dataset_v4/val_videos.txt
+    negative_ratio: 2.0
+    negative_ratio_by_split:
+      train: 5.0
+      val: 2.0
+    negative_per_video: 0
+  num_workers: 4
+  pin_memory: true
+
+video:
+  num_frames: 16
+  clip_duration: 9.0
+  event_margin: 0.5
+  temporal_jitter_sec: 1.5
+  image_size: [384, 640]
+  hflip_prob: 0.5
+
+spatial_crop:
+  mode: none
+
+model:
+  backbone: dinov3_vitl16
+  weights: ""
+  pretrained: true
+  freeze_backbone: true
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  temporal_fusion: transformer
+  hidden_dim: 512
+  temporal_layers: 4
+  temporal_heads: 8
+  dropout: 0.1
+
+cache:
+  enabled: false
+  dir: outputs/football_dino_features/vitl16_long
+  batch_size: 2
+  rebuild: false
+
+train:
+  epochs: 30
+  batch_size: 8
+  grad_accum_steps: 4
+  lr: 0.0003
+  backbone_lr: 0.00001
+  weight_decay: 0.05
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 20
+
+eval:
+  batch_size: 8

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DINO 足球事件质检台</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">D3</span>
+        <div><strong>足球事件质检台</strong><small>DINO + Frame Detection</small></div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-copy"><span id="progressText">载入中…</span><span id="progressPercent">0%</span></div>
+        <div class="progress"><i id="progressBar"></i></div>
+      </div>
+      <div class="top-actions">
+        <label class="reviewer">质检员 <input id="reviewerInput" placeholder="姓名/工号" /></label>
+        <a class="ghost-btn" href="/api/export?format=csv">导出 CSV</a>
+        <a class="ghost-btn" href="/api/export?format=json">导出 JSON</a>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="left-column">
+        <div class="video-shell">
+          <video id="player" controls preload="metadata"></video>
+          <div class="video-overlay top-left" id="videoBadge">—</div>
+          <div class="video-overlay bottom-right" id="timeBadge">00:00.000</div>
+          <div id="switchBadge" class="switch-badge hidden">正在切换候选…</div>
+          <div id="bufferBadge" class="buffer-badge hidden">网络缓冲中…</div>
+          <button id="soundBtn" class="sound-btn">🔊 开启声音</button>
+        </div>
+
+        <section class="timeline-panel">
+          <div class="timeline-toolbar">
+            <div>
+              <strong>事件证据时间轴</strong>
+              <span class="legend"><i class="dot shot"></i>射门 <i class="dot save"></i>扑救 <i class="dot set_piece"></i>定位球</span>
+            </div>
+            <div class="legend"><span class="line-key dino"></span>DINO <span class="line-key frame"></span>Frame</div>
+          </div>
+          <canvas id="timeline" height="210" aria-label="事件时间轴"></canvas>
+          <div class="timeline-hint">滚轮缩放 · 拖动平移 · 点击跳转 · 彩色菱形为模型候选</div>
+        </section>
+      </section>
+
+      <aside class="review-panel">
+        <div class="queue-toolbar">
+          <select id="videoSelect" aria-label="选择视频"></select>
+          <button id="nextUnreviewed" class="primary-small">下一个未审核</button>
+        </div>
+        <div class="filter-row">
+          <select id="labelFilter" aria-label="事件类别筛选"><option value="all">全部类别</option></select>
+          <select id="statusFilter" aria-label="审核状态筛选">
+            <option value="all">全部状态</option><option value="unreviewed">未审核</option>
+            <option value="accepted">已保留</option><option value="modified">已修改</option><option value="deleted">已删除</option>
+          </select>
+          <select id="evaluationFilter" aria-label="模型匹配结果筛选">
+            <option value="all">全部模型结果</option>
+            <option value="fp">仅看模型 FP</option>
+            <option value="matched">仅看已匹配 GT</option>
+            <option value="unlabeled">仅看未标注类别</option>
+          </select>
+          <select id="sourceFilter" aria-label="候选来源筛选">
+            <option value="all">全部候选来源</option>
+            <option value="model">DINO + Frame 主队列</option>
+            <option value="whistle_flagged">有哨声支持的主队列</option>
+            <option value="whistle_rescue">哨声独立补漏队列</option>
+          </select>
+          <label class="conflict"><input type="checkbox" id="conflictOnly" /> 仅看证据冲突</label>
+        </div>
+
+        <div id="emptyState" class="empty-state">请选择一个候选事件</div>
+        <article id="eventCard" class="event-card hidden">
+          <div class="event-heading">
+            <div><span id="eventClass" class="event-class">SHOT</span><strong id="eventTime">00:00.000</strong></div>
+            <div class="event-context"><span id="evaluationBadge" class="evaluation-badge">—</span><span id="eventPosition" class="event-position">0 / 0</span></div>
+          </div>
+          <div class="rapid-actions" aria-label="快速审核操作">
+            <button id="prevEventBtn" class="rapid-nav"><span>← 上一个</span><kbd>J</kbd></button>
+            <button id="replayEventBtn" class="rapid-replay"><span>↻ 重播</span><kbd>R</kbd></button>
+            <button id="acceptBtn" class="rapid-decision accept"><span>确认保留</span><kbd>Enter</kbd></button>
+            <button id="deleteBtn" class="rapid-decision delete"><span>删除误报</span><kbd>X</kbd></button>
+            <button id="nextEventBtn" class="rapid-nav"><span>下一个 →</span><kbd>K</kbd></button>
+          </div>
+          <div class="score-grid">
+            <div><span>DINO 事件分数</span><strong id="dinoScore">0.000</strong><i><b id="dinoBar"></b></i></div>
+            <div><span>Frame Detection</span><strong id="frameScore">0.000</strong><i><b id="frameBar"></b></i></div>
+          </div>
+          <div id="whistleEvidence" class="whistle-evidence hidden">
+            <div><strong>哨声召回提示</strong><span id="whistleSource">—</span></div>
+            <b id="whistleScore">0.000</b>
+          </div>
+          <div id="evidenceGrid" class="evidence-grid"></div>
+          <div class="meta-row"><span id="supportRange">片段 —</span><span id="mergeCount">合并 1 个窗口</span></div>
+
+          <div class="playback-actions">
+            <button data-seek="-5">−5s</button><button id="playContext">重播核心 8s</button><button id="playFullSegment">播放完整候选段</button><button data-seek="5">+5s</button>
+          </div>
+          <div id="segmentBatchActions" class="segment-batch-actions hidden">
+            <span id="segmentBatchHint">同一画面还有其他预测</span>
+            <button id="acceptSegmentBtn">此段预测全部正确</button>
+            <button id="deleteSegmentBtn">此段预测全部删除</button>
+          </div>
+
+          <div class="modify-block">
+            <span>修正为</span>
+            <div id="classButtons" class="class-buttons"></div>
+            <div class="time-adjust">
+              <button data-adjust="-1">−1s</button><button data-adjust="-0.2">−0.2s</button>
+              <input id="correctedTime" type="number" min="0" step="0.1" aria-label="修正后的时间" />
+              <button data-adjust="0.2">+0.2s</button><button data-adjust="1">+1s</button>
+            </div>
+            <button id="usePlayerTime" class="wide-secondary">使用播放器当前时间</button>
+            <textarea id="note" rows="2" placeholder="备注：误判原因、画面遮挡、标签歧义…"></textarea>
+            <button id="saveModify" class="wide-secondary emphasized">保存修改并下一个</button>
+          </div>
+
+          <footer class="event-footer">
+            <span id="statusPill" class="status-pill">未审核</span>
+            <button id="undoBtn" class="link-btn">撤销上次操作</button>
+            <span class="shortcut-hint">J/K 上/下一个 · Space 播放</span>
+          </footer>
+        </article>
+
+        <div class="queue-list-wrap">
+          <div class="queue-title"><strong>候选队列</strong><span id="queueCount">0 条</span></div>
+          <div id="queueList" class="queue-list"></div>
+        </div>
+      </aside>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>

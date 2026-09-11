@@ -1,0 +1,84 @@
+schema_version: football_longform_v2.alpha2
+experiment_id: lf_a0_official_fullscale
+seed: 42
+
+paths:
+  # This feature cache is exclusive to the official frozen DINO A experiment.
+  # Its children are split-namespaced: train/<id>/timeline.npz and
+  # calibration/<id>/timeline.npz.  It must never contain thirdparty18 data.
+  output_dir: experiments/lf_a0_official_fullscale
+  feature_store: /mnt/data_16t/football/feature_store_v2/official_lvd1689m_rgbflow_v1
+  annotations: /mnt/data_16t/football/football_events_human_repair
+  canonical_manifest: experiments/lf_a0_official_fullscale/canonical_manifest.json
+  train_ids: experiments/lf_a0_official_fullscale/canonical_train_media_ids.txt
+  calibration_ids: experiments/lf_a0_official_fullscale/canonical_calibration_media_ids.txt
+  thirdparty_test_ids: ../configs/football/splits/thirdparty18_holdout_all_rest_train/thirdparty18_test_video_ids.txt
+  legacy_long6_ids: ../configs/football/splits/thirdparty18_holdout_all_rest_train/long6_test_video_ids.txt
+
+task:
+  output_labels: [shot, save, corner, penalty, freekick, kickoff]
+  proposal_families: [shot_chain, restart, generic_event]
+  family_members:
+    shot_chain: [shot, save]
+    restart: [corner, penalty, freekick, kickoff]
+
+features:
+  timeline_hz: 5.0
+  context:
+    name: dino_context
+    required: true
+    dim: 2048
+    source_hz: 2.0
+    arch: dinov3_vitl16
+    backbone_id: official_lvd1689m
+    weights: ../checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+    image_size: [224, 384]
+  motion:
+    name: rgb_flow_grid
+    required: true
+    dim: 256
+    source_hz: 8.0
+    grid_size: [16, 16]
+  entity:
+    name: entity_motion
+    enabled: false
+    required: false
+    dim: 19
+    dropout: 0.80
+    max_residual_logit: 0.15
+
+model:
+  hidden_dim: 256
+  encoder_levels: 4
+  blocks_per_level: 2
+  kernel_size: 5
+  dropout: 0.10
+  time_fourier_bands: 8
+
+train:
+  sequence_seconds: 120.0
+  batch_size: 4
+  blocks_per_video: 8
+  positive_probability: 0.75
+  temporal_jitter_seconds: 15.0
+  learning_rate: 0.0003
+  weight_decay: 0.05
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+
+decode:
+  threshold: 0.25
+  nms_radius_seconds: {shot_chain: 3.0, restart: 6.0, generic_event: 3.0}
+  max_proposals_per_minute: {shot_chain: 3.0, restart: 2.0, generic_event: 1.0}
+
+acceptance:
+  rgb_only_checkpoint_selection: true
+  forbid_detection_gated_proposals: true
+  shot_chain_recall_at_budget: 0.97
+  restart_recall_at_budget: 0.97
+  max_entity_missing_recall_drop: 0.005
+  max_corrupted_entity_recall_drop: 0.010
+
+external_providers:
+  yolo_structure: {enabled: false}
+  rfdetr_ball_teacher: {enabled: false}

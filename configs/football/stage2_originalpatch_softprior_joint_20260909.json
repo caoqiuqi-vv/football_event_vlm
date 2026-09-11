@@ -1,0 +1,89 @@
+{
+  "output_dir": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage2/720p_originalpatch_softprior_joint_20260909",
+  "event_config": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage2/720p_optional_ball_roi_from_stage1e2_20260909/event_config.json",
+  "source_checkpoint": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage1/720p_full_native_kl_from720best_20260907/source_720p_best.pt",
+  "stage1_checkpoint": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage2/720p_optional_ball_roi_from_stage1e2_20260909/weights/stage1_epoch2.pt",
+  "control_checkpoint": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage2/720p_optional_ball_roi_from_stage1e2_20260909/weights/frozen_control_epoch1.pt",
+  "gpus": [
+    3,
+    4,
+    6,
+    1
+  ],
+  "epochs": 6,
+  "seeds": [
+    42
+  ],
+  "arms": {
+    "joint_temporal": {
+      "representation": "core",
+      "source": "stage1",
+      "fusion": "temporal",
+      "joint": true
+    }
+  },
+  "hidden": 128,
+  "batch_size": 64,
+  "lr": 0.0002,
+  "weight_decay": 0.01,
+  "pos_weight": [
+    1.0,
+    2.5,
+    4.0
+  ],
+  "recall_floors": [
+    0.84,
+    0.8,
+    0.72
+  ],
+  "clip_drop_probability": 0.15,
+  "frame_drop_probability": 0.2,
+  "candidate_drop_probability": 0.1,
+  "corrupt_consistency_weight": 0.05,
+  "residual_l2_weight": 0.01,
+  "workers": 2,
+  "cache_frame_chunk": 8,
+  "num_frames": 16,
+  "image_size": [
+    720,
+    1280
+  ],
+  "event_protocol": {
+    "mode": "all_positive_windows_overlap",
+    "stride_sec": 5.0,
+    "clip_sec": 10.0,
+    "tolerance_sec": 2.0,
+    "no_nms": true
+  },
+  "scope": "One exploratory joint Stage2 configuration: Stage1 heatmap guides original event DINO raw 3x3+2x2 context patches; unrestricted first peak and softly top-penalized second peak; no hard vertical exclusion.",
+  "threshold_policy": "calibration-tuned normal input; original thresholds reported separately and used on explicit all-null fallback",
+  "robustness_p_r_tolerance_pp": 1.0,
+  "base_dir": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage2/720p_optional_ball_roi_from_stage1e2_20260909",
+  "eval_batch_size": 64,
+  "selection": "calibration_macro_window_AP",
+  "core_cache_dir": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage2/720p_originalpatch_softprior_joint_20260909",
+  "temporal_lr": 2e-05,
+  "adapter_warmup_epochs": 1,
+  "execution_order": [
+    [
+      "joint_temporal",
+      42
+    ]
+  ],
+  "known_teacher_error": {
+    "video_id": "2042125172076392450",
+    "start_sec": 1060.0,
+    "end_sec": 1062.65,
+    "split": "calibration",
+    "anchor_sec": 1062.265
+  },
+  "position_prior": {
+    "mode": "soft_top",
+    "top_end": 0.25,
+    "full_weight_start": 0.4,
+    "top_weight": 0.25,
+    "bottom_weight": 1.0
+  },
+  "patch_source": "original_event_dino",
+  "optional_reproduction_seed": 43
+}

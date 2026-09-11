@@ -1,0 +1,49 @@
+output_dir: outputs/football_events/vitl16_freeze_temporal
+device: cuda:0
+
+data:
+  roots:
+    - /mnt/data/Datasets/Datasets/Football/video_clips_for_vlm/dataset_v3_with_render
+    - /mnt/data/Datasets/Datasets/Football/video_clips_for_vlm/dataset_v4
+  num_workers: 4
+  pin_memory: true
+
+video:
+  num_frames: 16
+  image_size: 224
+  hflip_prob: 0.5
+
+model:
+  backbone: dinov3_vitl16
+  weights: ""
+  pretrained: true
+  freeze_backbone: true
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  temporal_fusion: transformer
+  hidden_dim: 512
+  temporal_layers: 4
+  temporal_heads: 8
+  dropout: 0.1
+
+cache:
+  enabled: true
+  dir: outputs/football_dino_features/vitl16_lvd1689m
+  batch_size: 2
+  rebuild: false
+
+train:
+  epochs: 30
+  batch_size: 32
+  grad_accum_steps: 1
+  lr: 0.0003
+  backbone_lr: 0.00001
+  weight_decay: 0.05
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 20
+
+eval:
+  batch_size: 64

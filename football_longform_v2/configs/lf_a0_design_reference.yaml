@@ -1,0 +1,182 @@
+# Football LongForm V2 configuration contract.
+# The implementation intentionally lives outside train_football_events.py.
+schema_version: football_longform_v2.alpha2
+experiment_id: lf_a0_locator
+output_dir: outputs/football_longform_v2/lf_a0_locator
+seed: 42
+
+task:
+  output_labels: [shot, save, corner, penalty, freekick, kickoff]
+  proposal_families: [shot_chain, restart, generic_event]
+  hierarchy:
+    shot_chain: [shot, save]
+    restart: [corner, penalty, freekick, kickoff]
+  point_anchor_source: reviewed_timestamp
+  raw_interval_usage: context_only
+  rejected_event_policy: ignore
+
+data:
+  annotation_dir: /mnt/data_16t/football/football_events_human_repair
+  raw_annotation_dir: /mnt/data_16t/football/football_events_raw
+  video_roots:
+    xbotgo_0608: /mnt/data_16t/football/raw_video_720P
+  splits:
+    train: configs/football/splits/thirdparty18_holdout_all_rest_train/train_fit_video_ids.txt
+    calibration: configs/football/splits/thirdparty18_holdout_all_rest_train/calibration_20_video_ids.txt
+    thirdparty_test: configs/football/splits/thirdparty18_holdout_all_rest_train/thirdparty18_test_video_ids.txt
+  label_completeness_required: true
+  feature_store_dir: /mnt/data_16t/football/feature_store_v2
+
+dependency_policy:
+  required_at_inference: [dino_context, rgb_motion]
+  optional_at_inference: [audio, entity_motion, quality]
+  forbid_detection_gated_proposals: true
+  rgb_only_checkpoint_selection: true
+  entity_motion_role: privileged_training_or_bounded_residual
+  max_entity_residual_logit: 0.15
+
+timeline:
+  master_hz: 5.0
+  explicit_timestamps: true
+  explicit_delta_t: true
+  modalities:
+    dino_context:
+      enabled: true
+      sample_hz: 2.0
+      backbone: dinov3_vitl16
+      weights: checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+      feature_mode: multi_layer_cls_patch_attn
+      layers: [-8, -4, -1]
+      cache_dtype: float16
+    rgb_motion:
+      enabled: true
+      required_at_inference: true
+      sample_hz: 8.0
+      encoder: mobilenetv3_tsm
+      input_size: [224, 384]
+      camera_motion_compensation: true
+      streaming_non_overlapping: true
+      cache_dtype: float16
+    entity_motion:
+      enabled: false  # LF-A2 privileged-teacher ablation; never required.
+      required_at_inference: false
+      role: privileged_teacher_optional
+      sample_hz: 15.0
+      index_dir: /mnt/data_16t/football/evidence_index_v1
+      cache_dtype: float16
+    audio:
+      enabled: false  # LF-A1 single-variable addition.
+      sample_hz: 10.0
+      index_dir: /mnt/data_16t/football/audio_feature_index_v1
+    quality:
+      enabled: false  # LF-A1 single-variable addition.
+      sample_hz: 5.0
+    optional_modality_dropout:
+      entity_motion: 0.80
+      audio: 0.30
+      quality: 0.30
+
+locator:
+  architecture: temporal_unet_sgp
+  input_hz: 5.0
+  output_hz: 5.0
+  hidden_dim: 256
+  encoder_levels: 4
+  blocks_per_level: 2
+  kernel_size: 5
+  dropout: 0.10
+  max_context_sec: 120.0
+  stream_memory_sec: 30.0
+  outputs:
+    family_heatmaps: [shot_chain, restart, generic_event]
+    anchor_offset: true
+    proposal_quality: true
+    uncertainty: true
+
+targets:
+  sigma_sec:
+    shot_chain: 0.8
+    restart: 2.0
+    generic_event: 1.0
+  ignore_radius_sec:
+    shot_chain: 4.5
+    restart: 8.0
+    generic_event: 3.0
+  loss:
+    heatmap: quality_focal
+    heatmap_weight: 1.0
+    offset_weight: 0.5
+    family_contrastive_weight: 0.2
+    temporal_consistency_weight: 0.1
+    auxiliary_state_weight: 0.1
+
+train:
+  sequence_block_sec: 120.0
+  context_margin_sec: 15.0
+  blocks_per_video_per_epoch: 4
+  sampler: video_balanced_event_background
+  batch_size_per_gpu: 4
+  grad_accum_steps: 2
+  epochs: 20
+  optimizer: adamw
+  lr: 0.0003
+  weight_decay: 0.05
+  amp_dtype: bf16
+  ema_decay: 0.995
+  early_stopping:
+    monitor: proposal_recall_at_budget
+    patience: 4
+  startup_gates:
+    assert_trainable_parameter_delta: true
+    assert_nonzero_gradients: true
+    assert_feature_manifest_hash: true
+
+proposal_decode:
+  peak_nms_radius_sec:
+    shot_chain: 3.0
+    restart: 6.0
+    generic_event: 3.0
+  max_proposals_per_minute:
+    shot_chain: 3.0
+    restart: 2.0
+    generic_event: 1.0
+  total_max_proposals_per_minute: 6.0
+
+evaluation:
+  matching: strict_one_to_one_point
+  tolerances_sec: [1.0, 2.0, 5.0]
+  threshold_tuning_split: calibration
+  external_thresholds_frozen: true
+  video_cluster_bootstrap_samples: 2000
+  report:
+    - proposal_recall_at_budget
+    - candidate_ceiling
+    - per_class_ap
+    - timestamp_error
+    - proposals_per_video_hour
+    - review_minutes_per_video_hour
+    - dino_frames_per_video_second
+    - realtime_factor
+    - rgb_only_metrics
+    - optional_modality_gain
+    - corrupted_entity_stress_metrics
+  acceptance:
+    shot_chain_recall_at_budget: 0.97
+    restart_recall_at_budget: 0.97
+    total_max_proposals_per_minute: 6.0
+    min_dino_frame_reduction_vs_stride5: 0.40
+    rgb_only_must_pass_all_primary_kpis: true
+    max_recall_drop_when_entity_missing: 0.005
+    max_recall_drop_with_corrupted_entity_input: 0.010
+
+rare_class_policy:
+  penalty:
+    mode: few_shot_until_split_repaired
+    min_train_positives: 60
+    min_calibration_positives: 15
+    min_external_test_positives: 15
+    require_new_video_calibration_extension: true
+    require_new_video_test_extension: true
+    preserve_fixed_thirdparty18: true
+    exclude_from_macro_when_support_zero: true
+

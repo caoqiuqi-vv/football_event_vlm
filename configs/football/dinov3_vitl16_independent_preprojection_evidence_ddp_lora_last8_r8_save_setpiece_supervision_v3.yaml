@@ -1,0 +1,297 @@
+output_dir: outputs/football_events/vitl16_independent_preprojection_evidence_ddp_lora_last8_r8_save_setpiece_supervision_v3
+device: cuda:0
+gpu_ids:
+- 0
+- 1
+- 2
+- 3
+seed: 42
+deterministic: true
+task:
+  label_schema: set_piece
+data:
+  mode: long_videos
+  long_video:
+    roots:
+    - source: xbotgo_0608
+      videos_dir: /mnt/data_16t/football/raw_video_720P
+      annotations_dir: /mnt/data_16t/football/football_events_human_repair
+      raw_annotations_dir: /mnt/data_16t/football/football_events_raw
+      video_path_overrides:
+        "1985527741064613890": /mnt/data_16t/football/raw_video_hq_720P/1985527741064613890.mp4
+    split_files:
+      train:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/train_video_ids.txt
+      val:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/internal_val_video_ids.txt
+      external:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/thirdparty18_test_video_ids.txt
+    auto_split:
+      enabled: false
+    negative_ratio: 3.0
+    negative_ratio_by_split:
+      train: 3.0
+      val: 2.0
+      external: 2.0
+    negative_per_video: 0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    hard_negative:
+      enabled: false
+      manifest: ''
+      temporal_jitter_sec: 0.25
+      loss_weight: 1.0
+      include_in_val: false
+  num_workers_per_gpu: 3
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+video:
+  num_frames: 24
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 1.0
+  positive_window_strategy: anchor3_7_jitter
+  positive_anchor_min_sec: 3.0
+  positive_anchor_max_sec: 7.0
+  sampling_duration: 10.0
+  sampling_temporal_jitter_sec: 0.0
+  image_size:
+  - 512
+  - 896
+  hflip_prob: 0.5
+raw_set_piece_supervision:
+  enabled: true
+  rejected_ignore_enabled: true
+  rejected_ignore_margin_sec: 5.0
+  context_span_min_duration_sec: 0.5
+spatial_crop:
+  mode: none
+model:
+  backbone: dinov3_vitl16
+  weights: checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+  init_checkpoint: /home/new_users/qiuqi/code/dinov3-main/outputs/football_events/vitl16_independent_preprojection_evidence_ddp_lora_last8_r8_progressive/best.pt
+  init_checkpoint_strict: false
+  pretrained: true
+  freeze_backbone: true
+  freeze_loaded_backbone: false
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  frame_feature_mode: multi_layer_cls_patch_attn
+  frame_feature_layers:
+  - -8
+  - -4
+  - -1
+  frame_patch_pool: attn
+  temporal_fusion: temporal_stem_bottleneck_transformer
+  hidden_dim: 384
+  temporal_layers: 2
+  temporal_heads: 6
+  dropout: 0.1
+  gradient_checkpointing: true
+  gradient_checkpointing_mode: trainable_blocks
+  temporal_stem:
+    kernel_size: 3
+    dilations:
+    - 1
+    - 2
+    - 4
+    bottleneck_frames: 8
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_last_blocks: 8
+    target_modules:
+    - attn.qkv
+    - attn.proj
+    train_norm: false
+  response_curve_primary:
+    enabled: false
+    pooling: topk_lse
+    topk: 3
+    blend_weight: 0.0
+    curve_head: class_specific
+    curve_hidden_dim: 128
+    curve_kernel_size: 5
+    curve_dropout: 0.1
+  class_evidence:
+    enabled: true
+    mode: independent_preprojection
+    hidden_dim: 256
+    queries_per_class: 2
+    temporal_layers: 1
+    temporal_heads: 4
+    bottleneck_frames: 8
+    return_attention_maps: false
+cache:
+  enabled: false
+train:
+  epochs: 12
+  per_gpu_batch_size: 2
+  grad_accum_steps: 8
+  drop_last: true
+  lr_per_gpu: 5.0e-05
+  temporal_lr_per_gpu: 1.6666667e-05
+  head_lr_per_gpu: 3.3333333e-05
+  backbone_lr_per_gpu: 1.25e-05
+  weight_decay: 0.05
+  warmup:
+    ratio: 0.05
+  pos_weight:
+  - 1.0
+  - 2.5
+  - 4.0
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 40
+  save_epoch_checkpoints: false
+  save_pre_eval_recovery: true
+  checkpoint_selection: tuned_macro_precision_at_recall_floor
+  checkpoint_min_recall: 0.85
+  early_stopping:
+    enabled: true
+    monitor: selection_score
+    min_epoch: 3
+    patience: 4
+    min_delta: 0.0
+  resume:
+    enabled: false
+    checkpoint: ''
+    strict: false
+    load_optimizer: false
+    load_scheduler: false
+    load_scaler: false
+    load_ema: false
+  clip_loss_type: bce
+  frame_det_loss_weight: 0.18
+  temporal_clip_loss_weight: 0.0
+  frame_det_loss_type: focal_bce
+  frame_pos_weight:
+    shot: 3.0
+    save: 4.5
+    set_piece: 2.0
+  frame_heatmap_loss_weight: 0.35
+  frame_mil_loss_weight: 0.18
+  frame_rank_loss_weight: 0.12
+  frame_mil_topk: 3
+  frame_eval_topk: 4
+  frame_rank_pos_threshold: 0.5
+  frame_rank_neg_threshold: 0.05
+  frame_rank_margin: 1.25
+  frame_label_sigma_sec:
+    shot: 0.8
+    save: 0.8
+    set_piece: 1.8
+  frame_label_ignore_radius_sec:
+    shot: 4.5
+    save: 4.5
+    set_piece: 6.0
+  frame_loss_class_weight:
+    shot: 1.0
+    save: 0.8
+    set_piece: 0.4
+  response_curve_frame_loss_weight: 0.0
+  response_curve_frame_loss_class_weight:
+    shot: 1.0
+    save: 0.9
+    set_piece: 0.25
+  clean_negative_rank_loss_weight: 0.2
+  clean_negative_rank_branch: fused
+  clean_negative_rank_labels:
+  - shot
+  - save
+  clean_negative_rank_margin: 1.0
+  clean_negative_rank_pairs_per_positive: 2
+  clean_negative_rank_temperature: 1.0
+  clean_negative_rank_require_all_labels: true
+  hard_negative_rank_loss_weight: 0.0
+  online_hard_negative_loss_weight: 0.0
+  online_hard_negative_rank_loss_weight: 0.0
+  clean_positive_logit_margin_loss_weight: 0.1
+  clean_positive_logit_margin:
+    shot: 0.25
+    save: 0.25
+    set_piece: 0.0
+  clean_positive_logit_margin_labels:
+  - shot
+  - save
+  clean_positive_logit_margin_branch: fused
+  class_evidence_local_lr_per_gpu: 5.0e-05
+  class_evidence_temporal_lr_per_gpu: 5.0e-05
+  class_evidence_head_lr_per_gpu: 7.5e-05
+  class_evidence_no_evidence_loss_weight: 0.03
+  # Equal group influence for trusted shot+save, save-only and shot-only clips.
+  # This targets the shot shortcut without fabricating context-free save clips.
+  save_shot_cohort_loss_weight: 0.15
+  save_cohort_target_mass:
+    save_joint: 0.40
+    save_without_shot: 0.20
+    shot_only: 0.40
+  save_cohort_max_sample_weight: 3.0
+  # Preserve the aggregate set_piece output while forcing its token to retain
+  # corner/freekick/penalty/kickoff structure.
+  set_piece_subtype_loss_weight: 0.15
+  set_piece_subtype_pos_weight:
+    corner: 1.0
+    freekick: 1.04
+    penalty: 3.0
+    kickoff: 2.63
+  raw_context_span_loss_weight: 0.03
+  raw_context_span_temperature: 1.0
+  class_evidence_query_diversity_loss_weight: 0.0
+  class_evidence_counterfactual_loss_weight: 0.0
+  ddp_find_unused_parameters: false
+  ema:
+    enabled: true
+    decay: 0.995
+    evaluate: true
+    evaluate_raw: false
+    selection_source: ema
+    save_best_as_ema: true
+  ddp_suppress_non_main_stdout: true
+  print_per_video_metrics: false
+eval:
+  threshold: 0.5
+  per_gpu_batch_size: 4
+  audit_common_min_recall: 0.85
+  tuned_min_recall:
+    shot: 0.85
+    save: 0.80
+    set_piece: 0.80
+  external_audit:
+    enabled: true
+    split: external
+experiment_notes:
+  purpose_v3: 'Supervision repair: human-accepted anchors + raw accepted context-span coverage + raw rejected set-piece ignore zones + dataset-level save cohorts + frequency-balanced set-piece subtype auxiliary; head size unchanged.'
+  init_protocol_v3: 'Warm-start from the best last8/r8 progressive checkpoint; fresh optimizer/scheduler/EMA; new subtype head randomly initialized.'
+  evaluation_protocol_v3: 'Val15 alone tunes thresholds/selects checkpoints at recall floors shot=0.85, save=0.80, set_piece=0.80. External18 is evaluated only with frozen Val15 thresholds; combined33 is diagnostic and never selects checkpoints.'
+  supervision_init: epoch1 best.pt from the verified last8/r8 progressive run; fresh optimizer/scheduler/EMA
+  acceleration_changes: trainable-block-only activation checkpointing; EMA-only validation; eval batch 4
+  purpose: 'Independent event spaces before shared compression: per-class patch routing
+    + explicit no-evidence + per-class appearance/motion temporal modeling, with verified
+    DDP LoRA updates.'
+  raw_input_alignment: raw_video_720P; no HQ switch in this experiment
+  train_split: configs/football/splits/thirdparty18_test_long15_val_no_pn_train/train_video_ids.txt
+  threshold_val_split: configs/football/splits/thirdparty18_test_long15_val_no_pn_train/internal_val_video_ids.txt
+  untouched_test_split: configs/football/splits/thirdparty18_test_long15_val_no_pn_train/thirdparty18_test_video_ids.txt
+  effective_batch: 2 per GPU x 4 DDP ranks x 8 accumulation = 64
+  lora_protocol: inherited trained DINOv3 adaptation; last 8 blocks; r8 alpha16; qkv+attn.proj;
+    DDP mandatory; LoRA gradient/update gate must pass before launch
+  learning_rates_effective_after_global_batch_scaling:
+    lora: 5.0e-05
+    shared_temporal: 6.6666668e-05
+    class_evidence_router_temporal: 0.0002
+    class_evidence_head: 0.0003
+  checkpoint_policy: best.pt + last.pt only
+  ddp_efficiency: rank-0 aggregated logging; gradient all-reduce only at accumulation
+    boundaries; scheduler counts optimizer steps

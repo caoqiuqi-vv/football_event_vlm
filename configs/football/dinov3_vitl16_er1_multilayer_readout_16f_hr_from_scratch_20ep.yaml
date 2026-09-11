@@ -1,0 +1,152 @@
+output_dir: outputs/football_events/vitl16_er1_multilayer_readout_16f_hr_from_scratch_20ep
+device: cuda:0
+gpu_ids:
+- 0
+- 1
+seed: 42
+deterministic: true
+task:
+  label_schema: set_piece
+data:
+  mode: long_videos
+  long_video:
+    roots:
+    - source: xbotgo_0608
+      videos_dir: /mnt/data_16t/football/raw_video_720P
+      annotations_dir: /home/new_users/qiuqi/code/football_events_human_repair
+    split_files:
+      train:
+      - configs/football/splits/vitl16_lvd1689m_set_piece_seed42_162videos/train_video_ids.txt
+      val:
+      - configs/football/splits/vitl16_lvd1689m_set_piece_seed42_162videos/val_video_ids.txt
+    auto_split:
+      enabled: false
+      val_ratio: 0.2
+      seed: 42
+    negative_ratio: 5.0
+    negative_ratio_by_split:
+      train: 5.0
+      val: 2.0
+    negative_per_video: 0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    hard_negative:
+      enabled: false
+      manifest: ''
+      min_score: 0.0
+      max_per_video: 0
+      safety_margin_sec: 8.0
+      include_in_val: false
+  num_workers_per_gpu: 1
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 1
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+video:
+  num_frames: 16
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 1.5
+  image_size:
+  - 640
+  - 1120
+  hflip_prob: 0.5
+spatial_crop:
+  mode: none
+model:
+  backbone: dinov3_vitl16
+  weights: /mnt/data_16t/football/qiuqi/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+  init_checkpoint: ''
+  init_checkpoint_strict: false
+  pretrained: true
+  freeze_backbone: true
+  freeze_loaded_backbone: false
+  finetune_last_blocks: 0
+  frame_feature_dim: 8192
+  frame_feature_mode: multi_layer_cls_patch_attn
+  frame_feature_layers:
+  - -12
+  - -8
+  - -4
+  - -1
+  frame_patch_pool: attn
+  temporal_fusion: cls_transformer
+  hidden_dim: 512
+  temporal_layers: 4
+  temporal_heads: 8
+  dropout: 0.1
+  view_fusion: single
+  gradient_checkpointing: true
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_last_blocks: 12
+    target_modules:
+    - attn.qkv
+    - attn.proj
+    - mlp.fc1
+    - mlp.fc2
+    train_norm: true
+cache:
+  enabled: false
+  dir: outputs/football_dino_features/vitl16_er1_multilayer_readout_16f_hr_from_scratch_20ep
+  batch_size: 1
+  rebuild: false
+train:
+  epochs: 20
+  per_gpu_batch_size: 4
+  grad_accum_steps: 4
+  lr_per_gpu: 0.00003333333333333333
+  backbone_lr_per_gpu: 0.0000026666666666666666
+  weight_decay: 0.05
+  pos_weight:
+  - 1.0
+  - 2.5
+  - 4.0
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 20
+  save_epoch_checkpoints: true
+  checkpoint_selection: tuned_macro_precision_at_recall_floor
+  checkpoint_min_recall: 0.75
+  resume:
+    enabled: false
+    checkpoint: ''
+    strict: true
+    load_optimizer: false
+    load_scheduler: false
+    load_scaler: false
+  frame_det_loss_weight: 0.4
+  frame_det_loss_type: focal_bce
+  frame_heatmap_loss_weight: 0.5
+  frame_mil_loss_weight: 0.3
+  frame_rank_loss_weight: 0.0
+  frame_mil_topk: 3
+  frame_eval_topk: 4
+  frame_rank_pos_threshold: 0.5
+  frame_rank_neg_threshold: 0.05
+  frame_rank_margin: 1.0
+  frame_label_sigma_sec:
+    shot: 0.8
+    save: 0.8
+    set_piece: 1.5
+  frame_label_ignore_radius_sec:
+    shot: 3.0
+    save: 3.0
+    set_piece: 5.0
+eval:
+  threshold: 0.5
+  per_gpu_batch_size: 2
+  tuned_min_recall:
+    shot: 0.84
+    save: 0.78
+    set_piece: 0.65

@@ -1,0 +1,8 @@
+lmdb>=2.3,<3
+numpy>=2.0
+opencv-python>=4.10
+PyAV>=14
+PyYAML>=6
+torch>=2.6
+torchvision>=0.21
+

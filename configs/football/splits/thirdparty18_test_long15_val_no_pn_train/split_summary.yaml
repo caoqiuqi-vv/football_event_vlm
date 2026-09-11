@@ -1,0 +1,11 @@
+total_no_pn_protocol_count: 166
+train_count: 133
+internal_val_count: 15
+long5_val_count: 5
+extra10_val_count: 10
+thirdparty18_test_count: 18
+excluded_pn_like_count: 24
+train_val_overlap: 0
+train_test_overlap: 0
+val_test_overlap: 0
+policy: thirdparty18 is untouched final test. internal val is long6 minus thirdparty overlap plus 10 deterministic no-PN train videos. PN-like/new-source ids are excluded because timestamps are unreliable.

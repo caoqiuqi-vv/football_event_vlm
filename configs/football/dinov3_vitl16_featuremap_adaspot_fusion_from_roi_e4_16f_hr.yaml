@@ -1,0 +1,181 @@
+output_dir: outputs/football_events/vitl16_featuremap_adaspot_fusion_from_roi_e4_16f_hr
+device: cuda:0
+gpu_ids:
+- 0
+- 3
+- 4
+- 6
+- 7
+seed: 42
+deterministic: true
+task:
+  label_schema: set_piece
+data:
+  mode: long_videos
+  long_video:
+    roots:
+    - source: xbotgo_0608
+      videos_dir: /mnt/data_16t/football/raw_video_720P
+      annotations_dir: /home/new_users/qiuqi/code/football_events_human_repair
+    split_files:
+      train:
+      - configs/football/splits/vitl16_lvd1689m_set_piece_seed42_162videos/train_video_ids.txt
+      val:
+      - configs/football/splits/vitl16_lvd1689m_set_piece_seed42_162videos/val_video_ids.txt
+    auto_split:
+      enabled: false
+      val_ratio: 0.2
+      seed: 42
+    negative_ratio: 5.0
+    negative_ratio_by_split:
+      train: 5.0
+      val: 2.0
+    negative_per_video: 0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    # Keep sampled negatives away from event anchors to avoid ambiguous clips.
+    negative_safety_margin_sec: 4.0
+    negative_label_safety_margin_sec:
+      shot: 4.0
+      save: 4.0
+      set_piece: 6.0
+    hard_negative:
+      enabled: false
+      manifest: ''
+      min_score: 0.0
+      max_per_video: 0
+      safety_margin_sec: 8.0
+      include_in_val: false
+  num_workers_per_gpu: 2
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 1
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 1
+  preprocessing:
+    normalize_on_device: true
+video:
+  num_frames: 16
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 1.5
+  image_size:
+  - 640
+  - 1120
+  hflip_prob: 0.5
+spatial_crop:
+  mode: none
+model:
+  architecture_version: featuremap_adaspot_feature_fusion
+  backbone: dinov3_vitl16
+  weights: /mnt/data_16t/football/qiuqi/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+  init_checkpoint: ''
+  init_checkpoint_strict: false
+  pretrained: true
+  freeze_backbone: true
+  freeze_loaded_backbone: true
+  freeze_global_branch: false
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  frame_feature_mode: last_cls_patch_mean
+  temporal_fusion: cls_transformer
+  hidden_dim: 512
+  temporal_layers: 4
+  temporal_heads: 8
+  dropout: 0.1
+  view_fusion: single
+  gradient_checkpointing: false
+  featuremap_r1:
+    global_init_checkpoint: outputs/football_events/vitl16_strong_lora12_mlp_16f_hr_e1/best.pt
+    spatial_init_checkpoint: outputs/football_events/vitl16_spatial_attn_multilayer_readout_16f_hr/best.pt
+    roi_init_checkpoint: outputs/football_events/vitl16_featuremap_roi_only_residual_zero_sparsemax_16f_hr/epoch_4.pt
+  spatial_attention:
+    enabled: true
+    mode: adaspot_feature_fusion
+    patch_mode: last_layer
+    dynamic_query_scale_init: 0.1
+    attention_dim: 256
+    queries_per_class: 2
+    context_layers: 1
+    temporal_layers: 2
+    num_heads: 8
+    gate_init: 0.25
+    correction_dim: 128
+    correction_gate_init: 0.15
+    correction_max_delta: 1.5
+    return_attention_maps: true
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_last_blocks: 12
+    target_modules:
+    - attn.qkv
+    - attn.proj
+    - mlp.fc1
+    - mlp.fc2
+    train_norm: true
+cache:
+  enabled: false
+  dir: outputs/football_dino_features/vitl16_featuremap_r1_v2_discriminative_heatmap_16f_hr
+  batch_size: 1
+  rebuild: false
+train:
+  epochs: 4
+  per_gpu_batch_size: 8
+  grad_accum_steps: 1
+  lr_per_gpu: 2.0e-05
+  backbone_lr_per_gpu: 0.0
+  global_backbone_lr_per_gpu: 0.0
+  weight_decay: 0.05
+  pos_weight:
+  - 1.0
+  - 2.5
+  - 4.0
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  clip_loss_weight: 0.6
+  clip_loss_balance: per_class_equal_pos_neg
+  amp: true
+  amp_dtype: bf16
+  log_interval: 10
+  save_epoch_checkpoints: true
+  checkpoint_selection: tuned_macro_precision_at_recall_floor
+  checkpoint_min_recall: 0.75
+  resume:
+    enabled: true
+    checkpoint: outputs/football_events/vitl16_featuremap_adaspot_fusion_from_roi_e4_16f_hr/last.pt
+    strict: true
+    load_optimizer: true
+    load_scheduler: true
+    load_scaler: true
+  spatial_clip_loss_weight: 0.5
+  positive_retention_loss_weight: 0.25
+  negative_teacher_guard_loss_weight: 0.25
+  negative_teacher_guard_labels: [shot, save, set_piece]
+  negative_teacher_guard_margin: 0.0
+  negative_teacher_guard_branch: fused
+  positive_retention_margin: 0.0
+  positive_retention_branch: fused
+  spatial_attention_mil_loss_weight: 0.15
+  spatial_attention_mil_balance: per_class_equal_pos_neg
+  spatial_attention_mil_topk: 4
+  spatial_attention_query_diversity_loss_weight: 0.01
+  spatial_attention_concentration_loss_weight: 0.03
+  spatial_attention_overlap_loss_weight: 0.03
+  spatial_attention_entropy_target: 0.38
+  spatial_probe_lr_per_gpu: 5.0e-6
+  spatial_fusion_lr_per_gpu: 2.0e-5
+  frame_det_loss_weight: 0.0
+  global_backbone_lr: 0.0
+  local_backbone_lr: 0.0
+eval:
+  threshold: 0.5
+  per_gpu_batch_size: 8
+  tuned_min_recall:
+    shot: 0.84
+    save: 0.78
+    set_piece: 0.65

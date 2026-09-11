@@ -1,0 +1,142 @@
+MODEL:
+  META_ARCHITECTURE: SSLMetaArch
+  DEVICE: cuda
+compute_precision:
+  param_dtype: bf16
+  reduce_dtype: fp32
+  sharding_strategy: SHARD_GRAD_OP
+train:
+  batch_size_per_gpu: 32
+  dataset_path: FootballSSLWebDataset:root=/mnt/data_16t/football_ssl_wds/v2_pilot_nvdec:extra=configs/football_ssl/football_fullft_wds_v2.yaml:shuffle_buffer=2048
+  data_config: configs/football_ssl/football_fullft_wds_v2.yaml
+  output_dir: outputs/football_ssl/vitl16_fullft_wds_v2_stage1_2k
+  seed: 42
+  num_workers: 4
+  OFFICIAL_EPOCH_LENGTH: 1000
+  checkpointing: true
+  checkpointing_full: true
+  compile: false
+  cache_dataset: false
+  use_teacher_head: true
+  centering: sinkhorn_knopp
+student:
+  arch: vit_large
+  patch_size: 16
+  drop_path_rate: 0.0
+  layerscale: 1.0e-5
+  ffn_layer: mlp
+  ffn_ratio: 4.0
+  qkv_bias: true
+  proj_bias: true
+  ffn_bias: true
+  norm_layer: layernormbf16
+  n_storage_tokens: 4
+  mask_k_bias: true
+  untie_cls_and_patch_norms: false
+  untie_global_and_local_cls_norm: false
+  pos_embed_type: rope
+  pos_embed_rope_base: 100.0
+  pos_embed_rope_normalize_coords: separate
+  pos_embed_rope_rescale_coords: 2
+  pos_embed_rope_dtype: fp32
+  resume_from_teacher_chkpt: outputs/football_ssl/bootstrap/vitl16_fullft_ssl_wds_v2.pth
+  fp8_enabled: false
+lora:
+  enabled: false
+  rank: 16
+  alpha: 32
+  dropout: 0.0
+  target_last_blocks: 0
+  target_modules:
+  - attn.qkv
+  - attn.proj
+  train_norm: false
+dino:
+  loss_weight: 1.0
+  head_n_prototypes: 4096
+  head_bottleneck_dim: 256
+  head_hidden_dim: 2048
+  head_nlayers: 3
+  head_norm_last_layer: false
+  koleo_loss_weight: 0.1
+  koleo_loss_distributed: false
+  koleo_topk: 1
+  reweight_dino_local_loss: true
+  local_loss_weight_schedule:
+    start: 0.25
+    peak: 0.65
+    end: 0.50
+    warmup_epochs: 1
+ibot:
+  loss_weight: 1.0
+  mask_sample_probability: 0.5
+  mask_ratio_min_max: [0.1, 0.5]
+  separate_head: true
+  head_n_prototypes: 4096
+  head_bottleneck_dim: 256
+  head_hidden_dim: 2048
+  head_nlayers: 3
+  head_norm_last_layer: false
+teacher:
+  momentum_teacher: 0.996
+  final_momentum_teacher: 1.0
+  warmup_teacher_temp: 0.04
+  teacher_temp: 0.07
+  warmup_teacher_temp_epochs: 1
+crops:
+  global_crops_scale: [0.82, 1.0]
+  local_crops_number: 4
+  local_crops_scale: [0.60, 1.0]
+  global_crops_size: 448
+  local_crops_size: 320
+  gram_teacher_crops_size: 448
+  gram_teacher_no_distortions: true
+  horizontal_flips: true
+  share_color_jitter: false
+  teacher_to_student_resolution_scale: 1.0
+optim:
+  epochs: 2
+  optimizer: adamw
+  lr: 0.00002
+  min_lr: 0.000001
+  warmup_epochs: 1
+  weight_decay: 0.04
+  weight_decay_end: 0.10
+  clip_grad: 3.0
+  freeze_last_layer_epochs: 0
+  scaling_rule: none
+  patch_embed_lr_mult: 0.1
+  dino_head_wd_multiplier: 1.0
+  layerwise_decay: 0.90
+  multi_tensor_optim: true
+  adamw_beta1: 0.9
+  adamw_beta2: 0.95
+evaluation:
+  eval_period_iterations: 1000
+checkpointing:
+  period: 1000
+  max_to_keep: 5
+  keep_every: 5000
+gram:
+  use_loss: true
+  compute_stats: false
+  loss_weight: 1.0
+  ema_teacher: false
+  ckpt: outputs/football_ssl/bootstrap/vitl16_fullft_ssl_wds_v2.pth
+  it_load_ema_teacher: -1
+  rep_update: false
+  update_frequency: 100000
+  it_first_update: 100000
+  max_updates: 0
+  normalized: true
+  img_level: true
+  remove_neg: false
+  remove_only_teacher_neg: false
+  tokens_used: all
+  global_teacher_resize_method: bicubic
+  global_teacher_resize_antialias: false
+distillation:
+  enabled: false
+multidistillation:
+  enabled: false
+

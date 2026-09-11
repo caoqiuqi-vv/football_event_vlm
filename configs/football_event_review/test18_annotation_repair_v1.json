@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "pipeline_id": "test18_annotation_repair_v1_20260903",
+  "scope": "annotation repair, not unbiased model evaluation",
+  "manifest": "outputs/football_event_review/test18_full_annotation_repair_20260901/review_manifest.json",
+  "database": "outputs/football_event_review/test18_full_annotation_repair_20260901/reviews.sqlite3",
+  "candidate_queue": "outputs/football_event_review/fromlast_e8_best_test18_highconf_fp_20260901/annotation_repair_queue_clip10_peak25_rescue60/review_queue_candidate_plus_all_gt.jsonl",
+  "dense_run": "outputs/football_eval_runs/vitl16_d7c_fullimage_latest_split_720p_best_epoch3_thirdparty18_dense_s5_ckptthr_raw",
+  "adaptive_report": "outputs/football_eval_runs/vitl16_d7c_fullimage_latest_split_720p_best_epoch3_thirdparty18_dense_s5_ckptthr_raw/video_adaptive_thresholds_loov_tol3.json",
+  "stream_root": "outputs/football_event_review/test18_multiuser_qc_20260903/media_original_faststart",
+  "public_url": "https://119.147.202.180:8775/",
+  "invariants": {
+    "existing_gt_anchor_coverage": 1.0,
+    "selected_review_candidate_anchor_coverage": 1.0,
+    "all_manifest_events_have_database_rows": true,
+    "all_videos_have_original_faststart_streams": true,
+    "candidate_gt_nearby_is_review_merged_only": true,
+    "event_nms_or_deletion": false
+  },
+  "reference_model_recall": {
+    "protocol": "deployable LOOV median-logit adaptive threshold, window-overlap, tolerance=3s",
+    "shot": 0.8926654740608229,
+    "save": 0.8421052631578947,
+    "set_piece": 0.8374558303886925
+  },
+  "metric_warning": "routed peak-center proximity is a UI-routing diagnostic and must never be reported as dense model recall"
+}

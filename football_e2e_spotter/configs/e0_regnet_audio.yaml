@@ -1,0 +1,113 @@
+output_dir: football_e2e_spotter/experiments/e0_regnet_audio
+seed: 42
+
+task:
+  labels: [shot, save, corner, freekick]
+  families: [shot_chain, restart]
+
+data:
+  canonical_manifest: football_longform_v2/experiments/lf_a0_official_fullscale/canonical_manifest.json
+  train_ids: football_longform_v2/experiments/lf_a0_official_fullscale/canonical_train_media_ids.txt
+  calibration_ids: football_longform_v2/experiments/lf_a0_official_fullscale/canonical_calibration_media_ids.txt
+  annotations: football_longform_v2/experiments/lf_a1_videomae_clean5/canonical_annotations/all
+  frame_store: /mnt/data_16t/football/e2e_frame_store_v1
+  sample_fps: 2.0
+  image_size: [224, 384]
+  jpeg_quality: 90
+  audio_sample_rate: 16000
+  audio_mel_bins: 64
+
+model:
+  backbone: regnet_y_400mf
+  imagenet_initialization: true
+  freeze_backbone: false
+  refinement_stages: [block2, block3, block4]
+  visual_dim: 440
+  audio_dim: 128
+  hidden_dim: 256
+  gru_layers: 1
+  dropout: 0.15
+  shot_history_seconds: 6.0
+  max_offset_seconds: 2.0
+
+targets:
+  class_sigma_seconds:
+    shot: 0.75
+    save: 0.75
+    corner: 1.5
+    freekick: 1.5
+  family_sigma_seconds:
+    shot_chain: 3.0
+    restart: 5.0
+  ignore_radius_seconds:
+    shot: 4.0
+    save: 4.0
+    corner: 8.0
+    freekick: 8.0
+
+train:
+  epochs: 20
+  sequence_frames: 128
+  sequences_per_video: 16
+  positive_probability: 0.80
+  temporal_jitter_seconds: 18.0
+  batch_size_per_gpu: 1
+  gradient_accumulation_steps: 4
+  workers_per_gpu: 4
+  backbone_learning_rate: 0.0001
+  head_learning_rate: 0.0003
+  weight_decay: 0.03
+  warmup_epochs: 2
+  minimum_learning_rate: 0.000005
+  amp_dtype: bf16
+  grad_clip_norm: 1.0
+  early_stopping_patience: 5
+  full_evaluation_interval: 2
+  augment:
+    horizontal_flip_probability: 0.5
+    color_jitter_probability: 0.5
+    color_jitter_strength: 0.2
+    gaussian_blur_probability: 0.25
+
+loss:
+  positive_alpha: 0.75
+  focal_gamma: 2.0
+  family_weight: 0.25
+  offset_weight: 0.20
+  contrastive_weight: 0.02
+  contrastive_temperature: 0.10
+  hierarchy_weight: 0.03
+
+evaluation:
+  tolerances_seconds: [2.0, 3.0, 5.0]
+  operating_tolerance_seconds: 3.0
+  nms_radius_seconds:
+    shot: 3.0
+    save: 3.0
+    corner: 5.0
+    freekick: 5.0
+  target_recall:
+    shot: 0.90
+    save: 0.85
+    corner: 0.85
+    freekick: 0.85
+  uniform_baseline_intervals_seconds: [3.0, 4.0]
+  visual_inference_core_frames: 128
+  visual_inference_halo_frames: 12
+
+deployment_gate:
+  minimum_precision_at_target_recall:
+    shot: 0.15
+    save: 0.08
+    corner: 0.08
+    freekick: 0.05
+  maximum_fp_per_minute:
+    shot: 1.50
+    save: 1.50
+    corner: 1.00
+    freekick: 1.50
+
+sealed_test:
+  id_file: ../configs/football/splits/thirdparty18_holdout_all_rest_train/test_video_ids.txt
+  expected_count: 18
+  forbid_media_open_before_freeze: true

@@ -1,0 +1,288 @@
+output_dir: outputs/football_events/vitl16_stage1_peak_spotting_v1_3b_stage1_clipwarmup_small384_raw720_no_pn_24f
+device: cuda:0
+gpu_ids:
+- 0
+- 1
+- 2
+- 3
+seed: 42
+deterministic: true
+task:
+  label_schema: set_piece
+data:
+  mode: long_videos
+  long_video:
+    roots:
+    - source: xbotgo_0608
+      videos_dir: /mnt/data_16t/football/raw_video_720P
+      annotations_dir: /mnt/data_16t/football/football_events_human_repair
+    split_files:
+      train:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/train_video_ids.txt
+      val:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/internal_val_video_ids.txt
+    auto_split:
+      enabled: false
+    negative_ratio: 3.0
+    negative_ratio_by_split:
+      train: 3.0
+      val: 2.0
+    negative_per_video: 0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    hard_negative:
+      enabled: false
+      manifest: ''
+      temporal_jitter_sec: 0.25
+      loss_weight: 1.0
+      include_in_val: false
+  num_workers_per_gpu: 3
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+video:
+  num_frames: 24
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 1.0
+  positive_window_strategy: anchor3_7_jitter
+  positive_anchor_min_sec: 3.0
+  positive_anchor_max_sec: 7.0
+  sampling_duration: 10.0
+  sampling_temporal_jitter_sec: 0.0
+  image_size:
+  - 512
+  - 896
+  hflip_prob: 0.5
+spatial_crop:
+  mode: none
+model:
+  backbone: dinov3_vitl16
+  weights: checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+  init_checkpoint: outputs/football_events/vitl16_stage1_peak_spotting_v1_1_new_small384_raw720_no_pn_24f/best.pt
+  init_checkpoint_strict: false
+  pretrained: true
+  freeze_backbone: true
+  freeze_loaded_backbone: false
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  frame_feature_mode: multi_layer_cls_patch_attn
+  frame_feature_layers:
+  - -8
+  - -4
+  - -1
+  frame_patch_pool: attn
+  temporal_fusion: temporal_stem_bottleneck_transformer
+  hidden_dim: 384
+  temporal_layers: 2
+  temporal_heads: 6
+  dropout: 0.1
+  gradient_checkpointing: true
+  temporal_stem:
+    kernel_size: 3
+    dilations:
+    - 1
+    - 2
+    - 4
+    bottleneck_frames: 8
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_last_blocks: 6
+    target_modules:
+    - attn.qkv
+    - attn.proj
+    train_norm: false
+  response_curve_primary:
+    enabled: false
+    pooling: topk_lse
+    topk: 3
+    blend_weight: 0.0
+    curve_head: class_specific
+    curve_hidden_dim: 128
+    curve_kernel_size: 5
+    curve_dropout: 0.1
+cache:
+  enabled: false
+train:
+  epochs: 5
+  per_gpu_batch_size: 8
+  grad_accum_steps: 2
+  lr_per_gpu: 2.0e-05
+  temporal_lr_per_gpu: 2.0e-05
+  head_lr_per_gpu: 4.0e-05
+  backbone_lr_per_gpu: 5.0e-06
+  weight_decay: 0.05
+  warmup:
+    ratio: 0.05
+  pos_weight:
+  - 1.0
+  - 2.5
+  - 4.0
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 20
+  save_epoch_checkpoints: false
+  save_pre_eval_recovery: true
+  checkpoint_selection: tuned_macro_fbeta_at_recall_floor
+  checkpoint_min_recall: 0.88
+  early_stopping:
+    enabled: false
+    monitor: selection_score
+    min_epoch: 5
+    patience: 99
+    min_delta: 0.0
+  resume:
+    enabled: false
+    checkpoint: ''
+    strict: true
+    load_optimizer: false
+    load_scheduler: false
+    load_scaler: false
+  clip_loss_type: bce
+  frame_det_loss_weight: 0.15
+  temporal_clip_loss_weight: 0.0
+  frame_det_loss_type: focal_bce
+  frame_pos_weight:
+    shot: 3.5
+    save: 4.5
+    set_piece: 2.0
+  frame_heatmap_loss_weight: 0.35
+  frame_mil_loss_weight: 0.18
+  frame_rank_loss_weight: 0.1
+  frame_mil_topk: 3
+  frame_eval_topk: 4
+  frame_rank_pos_threshold: 0.5
+  frame_rank_neg_threshold: 0.05
+  frame_rank_margin: 1.25
+  frame_label_sigma_sec:
+    shot: 0.8
+    save: 0.8
+    set_piece: 1.8
+  frame_label_ignore_radius_sec:
+    shot: 4.5
+    save: 4.5
+    set_piece: 6.0
+  frame_loss_class_weight:
+    shot: 1.0
+    save: 0.8
+    set_piece: 0.4
+  response_curve_frame_loss_weight: 0.18
+  response_curve_frame_loss_class_weight:
+    shot: 1.0
+    save: 0.9
+    set_piece: 0.25
+  clean_negative_rank_loss_weight: 0.12
+  clean_negative_rank_branch: fused
+  clean_negative_rank_labels:
+  - shot
+  - save
+  clean_negative_rank_margin: 1.0
+  clean_negative_rank_pairs_per_positive: 2
+  clean_negative_rank_temperature: 1.0
+  clean_negative_rank_require_all_labels: true
+  hard_negative_rank_loss_weight: 0.0
+  online_hard_negative_loss_weight: 0.0
+  online_hard_negative_rank_loss_weight: 0.0
+  clean_positive_logit_margin_loss_weight: 0.03
+  clean_positive_logit_margin:
+    shot: 0.25
+    save: 0.25
+    set_piece: 0.0
+  clean_positive_logit_margin_labels:
+  - shot
+  - save
+  clean_positive_logit_margin_branch: fused
+  checkpoint_min_threshold:
+    shot: 0.0
+    save: 0.0
+    set_piece: 0.0
+  checkpoint_threshold_penalty_weight: 0.0
+  checkpoint_min_positive_p10:
+    shot: 0.0
+    save: 0.0
+    set_piece: 0.0
+  checkpoint_positive_p10_penalty_weight: 0.0
+  ema:
+    enabled: true
+    decay: 0.995
+    evaluate: true
+    selection_source: ema
+    save_best_as_ema: true
+  positive_low_tail_logit_margin_loss_weight: 0.02
+  positive_low_tail_logit_margin:
+    shot: 0.3
+    save: 0.25
+    set_piece: 0.0
+  positive_low_tail_logit_margin_labels:
+  - shot
+  - save
+  positive_low_tail_logit_margin_branch: fused
+  positive_low_tail_logit_margin_quantile: 0.25
+  positive_low_tail_logit_margin_min_count: 1
+  positive_low_tail_bce_mining_loss_weight: 0.08
+  positive_low_tail_bce_mining_labels:
+  - shot
+  - save
+  positive_low_tail_bce_mining_quantile: 0.25
+  positive_low_tail_bce_mining_min_count: 1
+  clip_loss_weight: 1.0
+  curriculum_stages:
+  - name: stage1_clip_semantic_warmup_isolated
+    start_epoch: 1
+    end_epoch: 5
+    overrides:
+      clip_loss_weight: 1.0
+      frame_det_loss_weight: 0.03
+      response_curve_frame_loss_weight: 0.03
+      frame_rank_loss_weight: 0.0
+      clean_negative_rank_loss_weight: 0.03
+      clean_positive_logit_margin_loss_weight: 0.03
+      positive_low_tail_logit_margin_loss_weight: 0.0
+      positive_low_tail_bce_mining_loss_weight: 0.0
+      frame_pos_weight:
+        shot: 2.0
+        save: 2.5
+        set_piece: 1.2
+eval:
+  threshold: 0.5
+  per_gpu_batch_size: 8
+  tuned_min_recall:
+    shot: 0.88
+    save: 0.88
+    set_piece: 0.88
+  tuned_objective: fbeta
+  tuned_fbeta_beta: 2.0
+experiment_notes:
+  purpose: V1.3 curriculum fine-tune from V1.1-new epoch8 best.pt. Fixes V1.2 multi-objective
+    conflict by learning clip semantics first, then weak dense/frame localization,
+    then high-recall low-tail/rank refinement.
+  init: outputs/football_events/vitl16_stage1_peak_spotting_v1_1_new_small384_raw720_no_pn_24f/best.pt
+  stage_policy: Stage1 epochs 1-5 clip-first; Stage2 epochs 6-10 dense/frame ramp;
+    Stage3 epochs 11-20 high-recall refinement. Early stopping disabled to force full
+    curriculum completion.
+  primary_metric: 18-video long-video recall/precision/manual-review-time; clip-val
+    tuned macro F2 @ recall floor 0.88 is checkpoint hygiene only.
+  v12_diagnosis: 'V1.2 improved in epoch2 but regressed at epoch3: train_loss 0.693,
+    mAP 0.5468, low-tail/gap deterioration; therefore do not continue V1.2.'
+  checkpoint_policy: save_epoch_checkpoints=false; keep best.pt, last.pt, pre_eval_recovery.pt
+    only.
+notes:
+  purpose: 'V1.3b isolated stage1: validate clip-first semantic warmup separately
+    before any dense/frame localization stage handoff.'
+  long_video_eval_anchor: After epoch5, evaluate external18 / long15 pipeline; do
+    not auto-chain stage2 until stage1 checkpoint is verified.
+  gpu_policy: Run only on physical GPUs 4,5,6,7; config gpu_ids are logical 0,1,2,3
+    under CUDA_VISIBLE_DEVICES.
+  curriculum_handoff: Stage2 must initialize from this stage1 output best.pt/last.pt
+    after stage1 validation, not directly from V1.1-new best.

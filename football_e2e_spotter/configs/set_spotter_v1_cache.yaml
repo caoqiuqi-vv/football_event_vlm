@@ -1,0 +1,12 @@
+# Preprocessing contract for Stage-1; build this cache before training.
+data:
+  canonical_manifest: football_longform_v2/experiments/lf_a0_official_fullscale/canonical_manifest.json
+  train_ids: football_longform_v2/experiments/lf_a0_official_fullscale/canonical_train_media_ids.txt
+  calibration_ids: football_longform_v2/experiments/lf_a0_official_fullscale/canonical_calibration_media_ids.txt
+  annotations: football_longform_v2/experiments/lf_a1_videomae_clean5/canonical_annotations/all
+  frame_store: /mnt/data_16t/football/set_spotter_4fps_288x512
+  sample_fps: 4.0
+  image_size: [288, 512]
+  jpeg_quality: 92
+  audio_sample_rate: 16000
+  audio_mel_bins: 64

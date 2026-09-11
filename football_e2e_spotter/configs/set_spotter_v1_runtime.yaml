@@ -1,0 +1,32 @@
+output_dir: football_e2e_spotter/experiments/set_spotter_v1_parallel
+seed: 42
+task:
+  labels: [shot, save, freekick, corner, kickoff]
+  matching_tolerance_seconds: 3.0
+data:
+  canonical_manifest: football_longform_v2/experiments/lf_a0_official_fullscale/canonical_manifest.json
+  train_ids: football_longform_v2/experiments/lf_a0_official_fullscale/canonical_train_media_ids.txt
+  calibration_ids: football_longform_v2/experiments/lf_a0_official_fullscale/canonical_calibration_media_ids.txt
+  annotations: /mnt/data_16t/football/football_events_human_repair
+  frame_store: /mnt/data_16t/football/set_spotter_4fps_288x512
+  sample_fps: 4.0
+  image_size: [288, 512]
+  audio_mel_bins: 64
+stage1:
+  core_seconds: 30.0
+  context_seconds: 15.0
+  num_slots: 24
+  candidate_recall_targets: {shot: 0.95, save: 0.90, freekick: 0.90, corner: 0.90, kickoff: 0.90}
+  model: {hidden_dim: 512, decoder_layers: 4, decoder_heads: 8}
+stage2:
+  backbone: dinov3_vitl16
+  global_image_size: [512, 896]
+  global_frames: 25
+  center_dense_frames: 17
+  local_scales: [0.25, 0.50]
+  lora_rank: 16
+  warmup_epochs: 2
+evaluation:
+  target_recall: {shot: 0.90, save: 0.85, freekick: 0.85, corner: 0.85, kickoff: 0.85}
+  tolerances_seconds: [1.0, 3.0, 5.0]
+  no_temporal_nms: true

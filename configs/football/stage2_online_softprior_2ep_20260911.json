@@ -1,0 +1,78 @@
+{
+  "output_dir": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage2/720p_online_softprior_joint_2ep_20260911",
+  "event_config": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage2/720p_optional_ball_roi_from_stage1e2_20260909/event_config.json",
+  "source_checkpoint": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage1/720p_full_native_kl_from720best_20260907/source_720p_best.pt",
+  "stage1_checkpoint": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage2/720p_optional_ball_roi_from_stage1e2_20260909/weights/stage1_epoch2.pt",
+  "control_checkpoint": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage2/720p_optional_ball_roi_from_stage1e2_20260909/weights/frozen_control_epoch1.pt",
+  "epochs": 2,
+  "seeds": [
+    42
+  ],
+  "arms": {
+    "joint_temporal": {
+      "representation": "core",
+      "source": "stage1",
+      "fusion": "temporal",
+      "joint": true
+    }
+  },
+  "hidden": 128,
+  "lr": 0.0002,
+  "weight_decay": 0.01,
+  "pos_weight": [
+    1.0,
+    2.5,
+    4.0
+  ],
+  "recall_floors": [
+    0.84,
+    0.8,
+    0.72
+  ],
+  "clip_drop_probability": 0.15,
+  "frame_drop_probability": 0.2,
+  "candidate_drop_probability": 0.1,
+  "corrupt_consistency_weight": 0.05,
+  "residual_l2_weight": 0.01,
+  "workers": 2,
+  "num_frames": 16,
+  "image_size": [
+    720,
+    1280
+  ],
+  "event_protocol": {
+    "mode": "all_positive_windows_overlap",
+    "stride_sec": 5.0,
+    "clip_sec": 10.0,
+    "tolerance_sec": 2.0,
+    "no_nms": true
+  },
+  "scope": "Two-epoch online screening; frozen DINO and Stage1; no feature cache; short optimizer-step adapter warmup then joint temporal/head training.",
+  "threshold_policy": "calibration-tuned normal input; original thresholds reported separately and used on explicit all-null fallback",
+  "robustness_p_r_tolerance_pp": 1.0,
+  "selection": "calibration_macro_window_AP",
+  "temporal_lr": 2e-05,
+  "adapter_warmup_epochs": 0,
+  "known_teacher_error": {
+    "video_id": "2042125172076392450",
+    "start_sec": 1060.0,
+    "end_sec": 1062.65,
+    "split": "calibration",
+    "anchor_sec": 1062.265
+  },
+  "position_prior": {
+    "mode": "soft_top",
+    "top_end": 0.25,
+    "full_weight_start": 0.4,
+    "top_weight": 0.25,
+    "bottom_weight": 1.0
+  },
+  "patch_source": "original_event_dino",
+  "manifest_source": "/home/new_users/qiuqi/code/dinov3-main/outputs/football_localization_stage2/720p_optional_ball_roi_from_stage1e2_20260909/manifest.json",
+  "seed": 42,
+  "world_size": 4,
+  "micro_batch_size": 2,
+  "accumulation_steps": 8,
+  "frame_chunk": 8,
+  "warmup_optimizer_steps": 50
+}

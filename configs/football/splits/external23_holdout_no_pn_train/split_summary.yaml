@@ -1,0 +1,9 @@
+historical_base_count: 162
+external_test_count: 23
+thirdparty18_count: 18
+long6_count: 6
+train_no_pn_count: 143
+train_fit_count: 123
+calibration_20_count: 20
+excluded_pn_like_count: 24
+policy: external test is thirdparty18 union long6. Training excludes external test and excludes PN-like/new-source ids not present in the historical 162-video base split because their timestamps are considered unreliable for dense/frame supervision.

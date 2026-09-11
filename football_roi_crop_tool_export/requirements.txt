@@ -1,0 +1,4 @@
+opencv-python
+numpy
+torch
+# Runtime binary dependency: ffmpeg with libx264 support

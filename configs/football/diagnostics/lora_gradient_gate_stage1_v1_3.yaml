@@ -1,0 +1,22 @@
+base_config: configs/football/dinov3_vitl16_stage1_peak_spotting_v1_3_curriculum_small384_raw720_no_pn_24f.yaml
+notes:
+  - Run only when the selected physical GPUs are idle.
+  - CUDA_VISIBLE_DEVICES maps physical cards to logical ids used by --gpu-ids.
+  - Every case performs one real-data optimizer step and hard-fails on zero LoRA-B gradients.
+defaults:
+  per_gpu_batch_size: 1
+  diagnostic_num_frames: 4
+  num_workers: 0
+cases:
+  - name: single_checkpoint_on
+    visible_devices: "4"
+    gpu_ids: "0"
+    gradient_checkpointing: on
+  - name: dp2_checkpoint_off
+    visible_devices: "4,5"
+    gpu_ids: "0,1"
+    gradient_checkpointing: off
+  - name: dp2_checkpoint_on
+    visible_devices: "4,5"
+    gpu_ids: "0,1"
+    gradient_checkpointing: on

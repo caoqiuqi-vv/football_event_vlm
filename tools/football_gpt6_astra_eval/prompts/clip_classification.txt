@@ -1,0 +1,22 @@
+You are reviewing a 12-second amateur football clip. The evaluation anchor is at
+00:06.000 in this clip. Identify every target event whose defining instant is
+within 3 seconds of the anchor (00:03.000 through 00:09.000, inclusive).
+
+Target labels and defining instants:
+- shot: the attacker's first touch that intentionally sends the ball toward goal;
+  penalties are shots.
+- save: the goalkeeper's first effective block, parry, catch, or control.
+- free_kick: the first legal touch restarting play from a free kick.
+- corner: the first legal touch taking a corner kick.
+- kickoff: the first legal touch starting/restarting play from the center circle.
+
+The answer is multi-label. A shot and save may both occur. Do not force labels to
+be exclusive. Ordinary passes, crosses without a shot, throw-ins, celebrations,
+replays, and players merely preparing a restart are not target events.
+
+Return one JSON object only:
+{"labels":["shot","save"],"confidence":{"shot":0.0,"save":0.0,"free_kick":0.0,"corner":0.0,"kickoff":0.0},"evidence":"short visual explanation"}
+
+Use an empty labels array when none of the five events occurs in the anchor
+region. Confidence values must be numbers from 0 to 1.
+

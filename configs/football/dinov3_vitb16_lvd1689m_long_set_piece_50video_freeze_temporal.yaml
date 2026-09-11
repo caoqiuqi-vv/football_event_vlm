@@ -1,0 +1,82 @@
+output_dir: outputs/football_events/vitb16_lvd1689m_long_set_piece_50video_freeze_temporal
+device: cuda:0
+gpu_ids: [0, 1]
+seed: 42
+
+task:
+  label_schema: set_piece
+
+data:
+  mode: long_videos
+  long_video:
+    roots:
+      - source: may_xbotgo
+        videos_dir: /code/raw_video_720P
+        annotations_dir: /code/annotations/v3_annotations
+      - source: xbotgo_0608
+        videos_dir: /code/raw_video_720P
+        annotations_dir: /code/annotations/v4_annotations
+    auto_split:
+      enabled: true
+      val_ratio: 0.2
+      seed: 42
+    negative_ratio: 0.5
+    negative_per_video: 0
+    negative_require_all_labels: true
+    negative_min_events_per_label: 4
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 4
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+
+video:
+  num_frames: 16
+  clip_duration: 9.0
+  event_margin: 1.0
+  temporal_jitter_sec: 1.5
+  image_size: [384, 640]
+  hflip_prob: 0.5
+
+spatial_crop:
+  mode: none
+
+model:
+  backbone: dinov3_vitb16
+  weights: /mnt/data_16t/football/qiuqi/checkpoints/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth
+  pretrained: true
+  freeze_backbone: true
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  temporal_fusion: transformer
+  hidden_dim: 512
+  temporal_layers: 4
+  temporal_heads: 8
+  dropout: 0.1
+
+cache:
+  enabled: false
+  dir: outputs/football_dino_features/vitb16_lvd1689m_long_set_piece_50video
+  batch_size: 2
+  rebuild: false
+
+train:
+  epochs: 30
+  batch_size: 128
+  grad_accum_steps: 1
+  lr: 0.0003
+  backbone_lr: 0.00001
+  weight_decay: 0.05
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 5
+
+eval:
+  batch_size: 128

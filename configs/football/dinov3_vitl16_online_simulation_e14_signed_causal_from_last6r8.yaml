@@ -1,0 +1,351 @@
+output_dir: outputs/football_events/vitl16_online_simulation_e14_signed_causal_localgrad_from_last6r8_e1
+device: cuda:0
+gpu_ids:
+- 0
+- 1
+- 2
+- 3
+seed: 42
+deterministic: true
+task:
+  label_schema: set_piece
+data:
+  mode: long_videos
+  long_video:
+    roots:
+    - source: xbotgo_0608
+      videos_dir: /mnt/data_16t/football/raw_video_720P
+      annotations_dir: /mnt/data_16t/football/football_events_human_repair
+      raw_annotations_dir: /mnt/data_16t/football/football_events_raw
+      video_path_overrides:
+        '1985527741064613890': /mnt/data_16t/football/raw_video_hq_720P/1985527741064613890.mp4
+    split_files:
+      train:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/train_video_ids.txt
+      val:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/internal_val_video_ids.txt
+      external:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/thirdparty18_test_video_ids.txt
+    auto_split:
+      enabled: false
+    negative_ratio: 3.0
+    negative_ratio_by_split:
+      train: 3.0
+      val: 2.0
+      external: 2.0
+    negative_per_video: 0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    hard_negative:
+      enabled: false
+      manifest: ''
+      temporal_jitter_sec: 0.25
+      loss_weight: 1.0
+      include_in_val: false
+    online_simulation:
+      enabled: true
+      chunk_duration_sec: 40.0
+      window_stride_sec: 5.0
+      event_chunk_fraction: 0.5
+      chunks_per_epoch: 0
+      event_position_min_sec: 10.0
+      event_position_max_sec: 30.0
+      primary_positive_min_sec: 3.0
+      primary_positive_max_sec: 7.0
+      edge_position_min_sec: 0.5
+      edge_position_max_sec: 2.0
+      pair_min_shift_sec: 2.0
+      edge_clip_loss_weight: 0.35
+      edge_frame_loss_weight: 0.5
+      near_event_ignore_sec: 2.0
+      near_event_max_sec: 15.0
+      near_event_anchor_gap_min_sec: 5.0
+      near_event_anchor_gap_max_sec: 15.0
+      near_event_negative_weight: 0.5
+      background_max_attempts: 256
+      # One pair per rank batch; 4800 pairs give ~300 optimizer updates/epoch at effective batch 64.
+      event_pairs_per_epoch: 4800
+      clean_background_windows_per_epoch: 4800
+  num_workers_per_gpu: 3
+  pin_memory: true
+  persistent_workers: false
+  prefetch_factor: 2
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+raw_set_piece_supervision:
+  enabled: true
+  rejected_ignore_enabled: true
+  rejected_ignore_margin_sec: 5.0
+  context_span_min_duration_sec: 0.5
+video:
+  num_frames: 24
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 1.0
+  positive_window_strategy: anchor3_7_jitter
+  positive_anchor_min_sec: 3.0
+  positive_anchor_max_sec: 7.0
+  sampling_duration: 10.0
+  sampling_temporal_jitter_sec: 0.0
+  image_size:
+  - 512
+  - 896
+  hflip_prob: 0.5
+spatial_crop:
+  mode: none
+model:
+  backbone: dinov3_vitl16
+  weights: checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+  init_checkpoint: /home/new_users/qiuqi/code/dinov3-main/outputs/football_events/vitl16_independent_preprojection_evidence_ddp_lora_v1_accelerated_resume_e1/best.pt
+  init_checkpoint_strict: false
+  pretrained: true
+  freeze_backbone: true
+  freeze_loaded_backbone: false
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  frame_feature_mode: multi_layer_cls_patch_attn
+  frame_feature_layers:
+  - -8
+  - -4
+  - -1
+  frame_patch_pool: attn
+  temporal_fusion: temporal_stem_bottleneck_transformer
+  hidden_dim: 384
+  temporal_layers: 2
+  temporal_heads: 6
+  dropout: 0.1
+  gradient_checkpointing: true
+  gradient_checkpointing_mode: trainable_blocks
+  temporal_stem:
+    kernel_size: 3
+    dilations:
+    - 1
+    - 2
+    - 4
+    bottleneck_frames: 8
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_last_blocks: 6
+    target_modules:
+    - attn.qkv
+    - attn.proj
+    train_norm: false
+  response_curve_primary:
+    enabled: false
+    pooling: topk_lse
+    topk: 3
+    blend_weight: 0.0
+    curve_head: class_specific
+    curve_hidden_dim: 128
+    curve_kernel_size: 5
+    curve_dropout: 0.1
+  class_evidence:
+    enabled: true
+    mode: independent_preprojection
+    hidden_dim: 256
+    queries_per_class: 2
+    temporal_layers: 1
+    temporal_heads: 4
+    bottleneck_frames: 8
+    anti_erasure_no_evidence: true
+    return_attention_maps: false
+cache:
+  enabled: false
+train:
+  epochs: 1
+  per_gpu_batch_size: 4
+  grad_accum_steps: 4
+  lr_per_gpu: 1.25e-05
+  temporal_lr_per_gpu: 1.25e-05
+  head_lr_per_gpu: 1.875e-05
+  backbone_lr_per_gpu: 2.5e-07
+  weight_decay: 0.05
+  warmup:
+    ratio: 0.05
+  pos_weight:
+  - 1.0
+  - 2.5
+  - 4.0
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 40
+  save_epoch_checkpoints: false
+  save_pre_eval_recovery: true
+  checkpoint_selection: tuned_mixed_objective
+  checkpoint_min_recall: 0.85
+  early_stopping:
+    enabled: true
+    monitor: selection_score
+    min_epoch: 2
+    patience: 2
+    min_delta: 0.0
+  resume:
+    enabled: false
+    checkpoint: ''
+    strict: true
+    load_optimizer: false
+    load_scheduler: false
+    load_scaler: false
+    load_ema: false
+  clip_loss_type: bce
+  frame_det_loss_weight: 0.18
+  temporal_clip_loss_weight: 0.0
+  frame_det_loss_type: focal_bce
+  frame_pos_weight:
+    shot: 3.0
+    save: 4.5
+    set_piece: 2.0
+  frame_heatmap_loss_weight: 0.35
+  frame_mil_loss_weight: 0.18
+  frame_rank_loss_weight: 0.12
+  frame_mil_topk: 3
+  frame_eval_topk: 4
+  frame_rank_pos_threshold: 0.5
+  frame_rank_neg_threshold: 0.05
+  frame_rank_margin: 1.25
+  frame_label_sigma_sec:
+    shot: 0.8
+    save: 0.8
+    set_piece: 1.8
+  frame_label_ignore_radius_sec:
+    shot: 4.5
+    save: 4.5
+    set_piece: 6.0
+  frame_loss_class_weight:
+    shot: 1.0
+    save: 0.8
+    set_piece: 0.4
+  response_curve_frame_loss_weight: 0.0
+  response_curve_frame_loss_class_weight:
+    shot: 1.0
+    save: 0.9
+    set_piece: 0.25
+  clean_negative_rank_loss_weight: 0.2
+  clean_negative_rank_branch: fused
+  clean_negative_rank_labels:
+  - shot
+  - save
+  clean_negative_rank_margin: 1.0
+  clean_negative_rank_pairs_per_positive: 2
+  clean_negative_rank_temperature: 1.0
+  clean_negative_rank_require_all_labels: true
+  hard_negative_rank_loss_weight: 0.0
+  online_hard_negative_loss_weight: 0.0
+  online_hard_negative_rank_loss_weight: 0.0
+  clean_positive_logit_margin_loss_weight: 0.1
+  clean_positive_logit_margin:
+    shot: 0.25
+    save: 0.25
+    set_piece: 0.0
+  clean_positive_logit_margin_labels:
+  - shot
+  - save
+  clean_positive_logit_margin_branch: fused
+  class_evidence_local_lr_per_gpu: 6.25e-06
+  class_evidence_temporal_lr_per_gpu: 6.25e-06
+  class_evidence_head_lr_per_gpu: 9.375e-06
+  # Frame-level null-mass supervision stays disabled: a non-event frame may
+  # still contain strong football evidence. The frozen gate is diagnostic only.
+  class_evidence_no_evidence_loss_weight: 0.0
+  class_evidence_gate_lr_per_gpu: 1.25e-03
+  # Disabled: unsigned attention concentration is not an event-vs-background target.
+  class_evidence_saliency_rank_weight: 0.0
+  class_evidence_saliency_rank_margin: 0.10
+  class_evidence_saliency_rank_topk: 3
+  class_evidence_saliency_rank_support_threshold: 0.1
+  class_evidence_saliency_rank_pairs_per_positive: 2
+  # Pair-only, absolute-time local-routing consistency. L1 avoids the tiny
+  # squared-gradient regime observed in E1.3.2.
+  class_evidence_cross_window_weight: 0.05
+  class_evidence_cross_window_tolerance_sec: 0.24
+  # Signed causal local evidence: content must support labeled positives and
+  # refute only the per-class trusted negatives. The counterfactual retains
+  # identical global context and removes patch appearance/motion only.
+  class_evidence_signed_causal_loss_weight: 0.05
+  class_evidence_signed_causal_positive_margin: 0.15
+  class_evidence_signed_causal_negative_margin: 0.10
+  class_evidence_signed_causal_negative_weight: 0.5
+  class_evidence_signed_causal_temperature: 0.5
+  class_evidence_no_evidence_balance: per_class_equal_event_background
+  event_min_target: 0.5
+  background_max_target: 0.1
+  require_both_sides_per_class: true
+  global_ddp_balance: true
+  frame_heatmap_aggregation: per_positive_core_context
+  frame_heatmap_core_min_target: 0.5
+  frame_heatmap_context_max_target: 0.1
+  class_evidence_query_diversity_loss_weight: 0.0
+  class_evidence_counterfactual_loss_weight: 0.0
+  ddp_find_unused_parameters: false
+  online_pair_consistency:
+    enabled: true
+    clip_weight: 0.05
+    response_weight: 0.01
+    start_epoch: 1
+    warmup_epochs: 0.25
+    teacher_logit_floor: 0.0
+    smooth_l1_beta: 0.5
+    response_support_radius_sec: 2.0
+    strict_metadata: true
+    require_pair_each_batch: true
+    require_response_curve: true
+    allow_frame_logits_fallback: false
+  ema:
+    enabled: true
+    decay: 0.995
+    evaluate: true
+    selection_source: ema
+    save_best_as_ema: true
+  ddp_suppress_non_main_stdout: true
+  print_per_video_metrics: false
+  clip_loss_balance: per_class_equal_pos_neg
+eval:
+  threshold: 0.5
+  per_gpu_batch_size: 4
+  tuned_min_recall:
+    shot: 0.85
+  tuned_min_recall_by_class:
+    shot: 0.85
+    save: null
+    set_piece: null
+  tuned_objective_by_class:
+    shot: precision_at_recall_floor
+    save: f1
+    set_piece: f1
+  external_audit:
+    enabled: false
+    split: external
+    online_mode:
+      enabled: true
+      window_stride_sec: 5.0
+      nms_radius_sec: 5.0
+      tolerance_sec: 5.0
+      capped_clip_sec: 10.0
+experiment_notes:
+  purpose_e14_signed_causal_local: >-
+    E1.4 (2026-08-26): fixes online central/edge geometry, preserves per-class clean-negative masks, repairs per-class diagnostic alignment, and makes cross-window supervision pair-only with L1 and one-frame matching. Unsigned saliency rank is disabled because strong local evidence also occurs in negatives. A signed causal objective compares a frozen-downstream local-patch path against a detached global-only counterfactual; global context is stop-gradient and adapter/temporal/classifier parameters are functional-frozen so only patch routing/values receive this auxiliary gradient: local evidence must raise the correct positive class and lower only per-class trusted negatives.
+  init_protocol: Warm-start from the validated last6/r8 ep8 best checkpoint; fresh
+    optimizer/scheduler/EMA. last8 is not used because it has not beaten last6 on
+    the agreed long-video protocol.
+  learning_rate_protocol: >-
+    Protect the validated last6 representation after E1.2 over-adaptation:
+    LoRA global 1e-6; evidence local/temporal global 2.5e-5; evidence classifier global 3.75e-5.
+  fixed_variables: Architecture, 24f 512x896 input, last6/r8 LoRA, train/val splits and base clip/frame objectives match the validated last6 baseline. E1.4 changes only the audited online geometry, mask semantics, cross-window matching and local-evidence objective; no detector auxiliary, HQ switch, HN mining, pseudo-anchor, save conditioning or V3 supervision.
+  decision_gate: Judge epoch1 first by data/loss invariants (central and edge geometry preserved, signed positive and negative slots nonzero, positive and negative causal gaps moving above zero, paired cross-window matched frames nonzero and gap decreasing), then by Val15 mixed selection and cached External18 online precision-recall-participation Pareto. Do not use frozen no-evidence mass or unsigned saliency gap as success criteria.
+  effective_batch: 4 per GPU x 4 DDP ranks x 4 accumulation = 64
+  checkpoint_policy: best.pt + last.pt only
+  threshold_policy_update_20260826: >-
+    Future threshold tuning/checkpoint selection uses
+    per-class mixed objectives: shot maximizes precision subject to recall>=0.85;
+    save and set_piece maximize exact tuned F1 without a recall floor. Never encode
+    the latter as a zero recall floor under a max-precision objective. Training-time
+    External18 audit is disabled; cached online predictions are rescored offline.

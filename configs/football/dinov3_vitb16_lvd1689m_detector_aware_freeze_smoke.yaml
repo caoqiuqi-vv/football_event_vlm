@@ -1,0 +1,99 @@
+output_dir: outputs/football_events/vitb16_detector_aware_freeze_smoke
+device: cpu
+gpu_ids: []
+seed: 42
+
+task:
+  label_schema: set_piece
+
+data:
+  mode: long_videos
+  long_video:
+    roots:
+      - source: detector_aware_smoke
+        videos_dir: /mnt/data/Datasets/Datasets/Football/xbotgo_football_data_0608/videos
+        annotations_dir: /home/new_users/qiuqi/code/football_events_human_repair
+    split_files:
+      train:
+        - configs/football/splits/detector_aware_smoke/train_video_ids.txt
+      val:
+        - configs/football/splits/detector_aware_smoke/val_video_ids.txt
+    auto_split:
+      enabled: false
+      val_ratio: 0.2
+      seed: 42
+    negative_ratio: 0.0
+    negative_per_video: 0
+    negative_require_all_labels: true
+    negative_min_events_per_label: 4
+  num_workers: 0
+  pin_memory: false
+  persistent_workers: false
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 0
+  preprocessing:
+    normalize_on_device: false
+
+video:
+  num_frames: 4
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 0.0
+  image_size: [224, 224]
+  hflip_prob: 0.0
+
+spatial_crop:
+  mode: detector_aware
+  manifest_root: /home/new_users/qiuqi/code/det_and_track/outputs/player_color_reid_lap_20260713
+  ball_conf: 0.5
+  goal_conf: 0.5
+  person_conf: 0.4
+  padding: 0.12
+  min_crop_area_ratio: 0.15
+  max_crop_area_ratio: 0.85
+  max_frame_gap: 5
+
+model:
+  backbone: dinov3_vitb16
+  weights: /mnt/data_16t/football/qiuqi/checkpoints/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth
+  pretrained: true
+  freeze_backbone: true
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  temporal_fusion: transformer
+  hidden_dim: 512
+  temporal_layers: 4
+  temporal_heads: 8
+  dropout: 0.1
+
+cache:
+  enabled: false
+  dir: outputs/football_dino_features/vitb16_detector_aware_freeze_smoke
+  batch_size: 2
+  rebuild: false
+
+train:
+  epochs: 1
+  batch_size: 1
+  grad_accum_steps: 1
+  lr: 0.0003
+  backbone_lr: 0.00001
+  weight_decay: 0.05
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  amp: false
+  amp_dtype: bf16
+  log_interval: 1
+  save_epoch_checkpoints: false
+  resume:
+    enabled: false
+    checkpoint: ""
+    strict: true
+    load_optimizer: true
+    load_scheduler: true
+    load_scaler: true
+
+eval:
+  batch_size: 1

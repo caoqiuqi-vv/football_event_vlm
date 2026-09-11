@@ -1,0 +1,166 @@
+output_dir: football_longform_v2/experiments/lf_a1_videomae_clean5
+device: cuda:0
+gpu_ids: [0, 6, 7]
+seed: 42
+deterministic: true
+
+task:
+  label_schema: five_way
+
+data:
+  mode: long_videos
+  long_video:
+    roots:
+      - source: canonical_train_calibration
+        videos_dir: /mnt/data_16t/football/raw_video_720P
+        annotations_dir: football_longform_v2/experiments/lf_a1_videomae_clean5/canonical_annotations/all
+    split_files:
+      train:
+        - football_longform_v2/experiments/lf_a0_official_fullscale/canonical_train_media_ids.txt
+      val:
+        - football_longform_v2/experiments/lf_a0_official_fullscale/canonical_calibration_media_ids.txt
+    auto_split:
+      enabled: false
+    # Ordinary coverage-balanced background only. A0 false peaks are excluded
+    # from the clean representation gate and used solely in later ablations.
+    negative_ratio: 3.0
+    negative_ratio_by_split: {train: 3.0, val: 2.0}
+    negative_per_video: 0
+    negative_per_minute: 1.0
+    negative_per_minute_by_split: {train: 1.0, val: 1.0}
+    negative_sampling_mode: coverage_balanced
+    negative_candidate_stride_sec: 2.0
+    negative_temporal_bin_sec: 60.0
+    negative_min_start_distance_sec: 2.0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    hard_negative:
+      enabled: false
+      manifest: football_longform_v2/experiments/lf_a1_videomae_clean5/hard_negatives.json
+      min_score: 0.0
+      max_per_video: 0
+      safety_margin_sec: 8.0
+      include_in_val: false
+  num_workers_per_gpu: 3
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+
+video:
+  num_frames: 16
+  clip_duration: 10.0
+  sampling_duration: 4.0
+  sampling_temporal_jitter_sec: 0.5
+  event_margin: 1.0
+  temporal_jitter_sec: 1.5
+  image_size: [224, 384]
+  hflip_prob: 0.5
+
+raw_set_piece_supervision:
+  enabled: false
+
+spatial_crop:
+  mode: none
+
+detection_hint:
+  enabled: false
+
+model:
+  backbone: videomaev2_vitb16
+  weights: /home/new_users/qiuqi/code/VideoMAEv2/model_zoo/vit_b_k710_dl_from_giant.pth
+  pretrained: true
+  init_checkpoint: ""
+  init_checkpoint_strict: false
+  freeze_backbone: true
+  finetune_last_blocks: 4
+  frame_feature_mode: last_cls_patch_mean
+  frame_feature_dim: 1536
+  temporal_fusion: videomae_residual_transformer
+  hidden_dim: 512
+  temporal_layers: 2
+  temporal_heads: 8
+  dropout: 0.1
+  view_fusion: single
+  gradient_checkpointing: true
+  videomaev2:
+    source_root: /home/new_users/qiuqi/code/VideoMAEv2
+    tubelet_size: 2
+    drop_path_rate: 0.05
+    preserve_global_feature: true
+    temporal_gate_init: 0.25
+  lora:
+    enabled: false
+
+cache:
+  enabled: false
+  dir: football_longform_v2/experiments/lf_a1_videomae_clean5/cache_unused
+  batch_size: 1
+  rebuild: false
+
+train:
+  epochs: 4
+  per_gpu_batch_size: 12
+  grad_accum_steps: 2
+  lr_per_gpu: 0.000025
+  backbone_lr_per_gpu: 0.00000125
+  weight_decay: 0.05
+  pos_weight: auto
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 20
+  save_epoch_checkpoints: true
+  checkpoint_selection: tuned_macro_precision_at_recall_floor
+  checkpoint_min_recall: 0.85
+  global_action_aux_loss_weight: 0.3
+  temporal_branch_aux_loss_weight: 0.5
+  early_stopping:
+    enabled: true
+    monitor: tuned_mAP
+    min_epoch: 2
+    patience: 2
+    min_delta: 0.002
+  resume:
+    enabled: false
+    checkpoint: ""
+    strict: true
+    load_optimizer: true
+    load_scheduler: true
+    load_scaler: true
+  frame_det_loss_weight: 0.25
+  frame_det_loss_type: focal_bce
+  frame_pos_weight: [2.0, 3.0, 4.0, 4.0, 8.0]
+  frame_heatmap_loss_weight: 0.5
+  frame_mil_loss_weight: 0.3
+  frame_rank_loss_weight: 0.0
+  frame_mil_topk: 3
+  frame_eval_topk: 4
+  frame_label_sigma_sec:
+    shot: 0.8
+    save: 0.8
+    corner: 1.5
+    freekick: 1.5
+    penalty: 1.5
+  frame_label_ignore_radius_sec:
+    shot: 3.0
+    save: 3.0
+    corner: 5.0
+    freekick: 5.0
+    penalty: 5.0
+
+eval:
+  threshold: 0.5
+  per_gpu_batch_size: 12
+  tuned_min_recall:
+    shot: 0.90
+    save: 0.85
+    corner: 0.85
+    freekick: 0.85
+    penalty: 0.85

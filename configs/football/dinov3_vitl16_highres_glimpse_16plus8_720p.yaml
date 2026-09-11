@@ -1,0 +1,178 @@
+output_dir: outputs/football_events/vitl16_highres_glimpse_16plus8_720p
+device: cuda:0
+gpu_ids: [0, 1, 2, 3]
+seed: 42
+deterministic: true
+
+task:
+  label_schema: set_piece
+
+data:
+  mode: long_videos
+  long_video:
+    roots:
+      - source: xbotgo_0608
+        videos_dir: /mnt/data_16t/football/raw_video_720P
+        annotations_dir: /home/new_users/qiuqi/code/football_events_human_repair
+    split_files:
+      train:
+        - configs/football/splits/vitl16_lvd1689m_set_piece_seed42_162videos/train_video_ids.txt
+      val:
+        - configs/football/splits/vitl16_lvd1689m_set_piece_seed42_162videos/val_video_ids.txt
+    auto_split:
+      enabled: false
+      val_ratio: 0.2
+      seed: 42
+    negative_ratio: 5.0
+    negative_ratio_by_split:
+      train: 5.0
+      val: 2.0
+    negative_label_safety_margin_sec_by_split:
+      train: {shot: 3.0, save: 3.0, set_piece: 5.0}
+      val: {shot: 0.0, save: 0.0, set_piece: 0.0}
+    negative_per_video: 0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    hard_negative:
+      enabled: false
+      manifest: ""
+      min_score: 0.0
+      max_per_video: 0
+      safety_margin_sec: 8.0
+      include_in_val: false
+  num_workers_per_gpu: 1
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 1
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+
+video:
+  num_frames: 16
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 1.5
+  image_size: [640, 1120]
+  hflip_prob: 0.5
+
+spatial_crop:
+  mode: none
+
+detection_hint:
+  enabled: false
+
+model:
+  backbone: dinov3_vitl16
+  weights: checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+  # Strongest same-split global/temporal checkpoint (72.24 mAP).
+  init_checkpoint: outputs/football_events/vitl16_spatial_attn_residual_multilayer_16f_hr/best.pt
+  init_checkpoint_strict: false
+  pretrained: true
+  freeze_backbone: true
+  freeze_loaded_backbone: true
+  freeze_global_branch: false
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  frame_feature_mode: residual_multilayer_cls_patch_attn
+  frame_feature_layers: [-8, -4, -1]
+  frame_patch_pool: attn
+  temporal_fusion: cls_transformer
+  hidden_dim: 512
+  temporal_layers: 4
+  temporal_heads: 8
+  dropout: 0.1
+  view_fusion: single
+  gradient_checkpointing: true
+  highres_glimpse:
+    enabled: true
+    # 32 native-pixel frames are decoded; only 2x4 selected crops are encoded.
+    pool_frames: 32
+    pool_image_size: [720, 1280]
+    candidates: 2
+    frames_per_candidate: 4
+    crop_size: 384
+    attention_dim: 128
+    nms_radius: 2
+    min_scale: [0.24, 0.30]
+    max_scale: [0.58, 0.72]
+    fusion_init: 0.05
+    freeze_selector: true
+  spatial_attention:
+    enabled: false
+  class_evidence:
+    enabled: false
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_last_blocks: 12
+    target_modules: [attn.qkv, attn.proj, mlp.fc1, mlp.fc2]
+    train_norm: true
+
+cache:
+  enabled: false
+  dir: outputs/football_dino_features/vitl16_highres_glimpse_16plus8_720p
+  batch_size: 1
+  rebuild: false
+
+train:
+  epochs: 8
+  per_gpu_batch_size: 4
+  grad_accum_steps: 3
+  # Keep the transferred four-layer temporal head conservative; learn crop/fusion faster.
+  lr_per_gpu: 0.000005
+  highres_glimpse_lr_per_gpu: 0.000025
+  backbone_lr_per_gpu: 0.0
+  weight_decay: 0.03
+  pos_weight: [1.0, 2.5, 4.0]
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  clip_loss_weight: 1.0
+  clip_loss_balance: all
+  amp: true
+  amp_dtype: bf16
+  log_interval: 20
+  save_epoch_checkpoints: true
+  checkpoint_selection: tuned_macro_precision_at_recall_floor
+  checkpoint_min_recall: 0.75
+
+  frame_det_loss_weight: 0.20
+  frame_det_loss_type: focal_bce
+  frame_heatmap_loss_weight: 0.5
+  frame_mil_loss_weight: 0.3
+  frame_rank_loss_weight: 0.2
+  highres_local_frame_loss_weight: 0.35
+  frame_mil_topk: 3
+  frame_eval_topk: 4
+  frame_rank_pos_threshold: 0.5
+  frame_rank_neg_threshold: 0.05
+  frame_rank_margin: 0.75
+  frame_label_sigma_sec: {shot: 0.8, save: 0.8, set_piece: 1.5}
+  frame_label_ignore_radius_sec: {shot: 3.0, save: 3.0, set_piece: 5.0}
+
+  positive_retention_loss_weight: 0.05
+  positive_retention_margin: 0.0
+  positive_retention_branch: fused
+  early_stopping:
+    enabled: true
+    monitor: tuned_mAP
+    min_epoch: 3
+    patience: 2
+    min_delta: 0.002
+  resume:
+    enabled: false
+    checkpoint: ""
+    strict: true
+    load_optimizer: false
+    load_scheduler: false
+    load_scaler: false
+
+eval:
+  threshold: 0.5
+  per_gpu_batch_size: 4
+  tuned_min_recall: {shot: 0.84, save: 0.78, set_piece: 0.65}

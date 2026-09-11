@@ -1,0 +1,95 @@
+output_dir: football_longform_v2/experiments/lf_a2_sequential_locator
+seed: 42
+
+task:
+  labels: [shot, save, corner, freekick]
+  families: [shot_chain, restart]
+
+data:
+  canonical_manifest: football_longform_v2/experiments/lf_a0_official_fullscale/canonical_manifest.json
+  annotations: football_longform_v2/experiments/lf_a1_videomae_clean5/canonical_annotations/all
+  store_root: /mnt/data_16t/football/feature_store_v2/videomae_k710_a1_best_4s_v1
+
+model:
+  hidden_dim: 384
+  dilations: [1, 2, 4, 8, 16, 32]
+  dropout: 0.1
+  shot_history_steps: 12
+  max_offset_seconds: 2.0
+  detach_shot_context: true
+  tubelets_per_chunk: 8
+
+targets:
+  class_sigma_seconds:
+    shot: 0.8
+    save: 1.0
+    corner: 2.0
+    freekick: 2.0
+  family_sigma_seconds:
+    # Families are broad temporal states, not event-peak duplicates.  The
+    # class heads and offsets remain responsible for the exact timestamp.
+    shot_chain: 3.0
+    restart: 4.0
+  class_ignore_radius_seconds:
+    shot: 4.5
+    save: 4.5
+    corner: 8.0
+    freekick: 8.0
+  family_ignore_radius_seconds:
+    shot_chain: 4.5
+    restart: 8.0
+
+train:
+  epochs: 16
+  block_seconds: 192.0
+  blocks_per_video: 12
+  positive_probability: 0.75
+  jitter_seconds: 24.0
+  batch_size: 18
+  workers: 6
+  learning_rate: 0.0003
+  minimum_learning_rate: 0.00001
+  weight_decay: 0.03
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 20
+  early_stopping_patience: 5
+
+loss:
+  positive_alpha: 0.75
+  focal_gamma: 2.0
+  family_weight: 0.3
+  offset_weight: 0.2
+  hierarchy_weight: 0.05
+
+evaluation:
+  tolerances_seconds: [2.0, 3.0, 5.0]
+  operating_tolerance_seconds: 3.0
+  # Same-label model-free controls. A learned locator must reduce review load
+  # materially below these dense coverage rates, not merely hit recall.
+  uniform_baseline_intervals_seconds: [3.0, 4.0]
+  nms_radius_seconds:
+    shot: 3.0
+    save: 3.0
+    corner: 5.0
+    freekick: 5.0
+  target_recall:
+    shot: 0.90
+    save: 0.85
+    corner: 0.85
+    freekick: 0.85
+
+deployment_gate:
+  # Phase gates for keeping human-review volume bounded. They are not final
+  # product claims and must still be confirmed on the sealed 18-video test.
+  minimum_precision_at_target_recall:
+    shot: 0.15
+    save: 0.08
+    corner: 0.08
+    freekick: 0.05
+  maximum_fp_per_minute:
+    shot: 1.50
+    save: 1.50
+    corner: 1.00
+    freekick: 1.50

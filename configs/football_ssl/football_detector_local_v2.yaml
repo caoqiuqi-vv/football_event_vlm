@@ -1,0 +1,47 @@
+kind: football_detector_local_v2
+
+# Wide global crops preserve the pitch layout and small-player evidence.
+global_size: [448, 800]
+global_scale: [0.82, 1.0]
+global_ratio: [1.65, 1.90]
+
+# Four locals guarantee both focused and unconstrained evidence per sample:
+# detector/fallback, motion/fallback, random anchor, random neighbor.
+local_size: 320
+local_crops_number: 4
+local_scale: [0.60, 1.0]
+horizontal_flips: true
+
+temporal:
+  neighbor_min_sec: 0.5
+  neighbor_max_sec: 1.5
+
+photometric:
+  brightness: 0.25
+  contrast: 0.25
+  saturation: 0.15
+  hue: 0.05
+  color_jitter_probability: 0.8
+  grayscale_probability: 0.05
+  jpeg_probability: 0.25
+  jpeg_quality: [55, 95]
+
+spatial_crop:
+  mode: robust_detector_aware
+  index_root: outputs/football_roi_indices/robust_v2
+  context_sec: 2.0
+  padding: 0.18
+  min_crop_area_ratio: 0.015
+  max_crop_area_ratio: 0.40
+  min_roi_confidence: 0.35
+  goal_conf: 0.40
+  person_conf: 0.35
+  center_circle_conf: 0.35
+  min_goal_frames: 2
+  min_ball_points: 3
+  min_person_frames: 3
+  max_people: 10
+  max_cached_videos: 2
+  raw_ball_conf: 0.10
+  temporal_mode: clip
+

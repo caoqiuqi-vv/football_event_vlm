@@ -1,0 +1,102 @@
+output_root: /mnt/data_16t/football/qiuqi/bilibili_football
+
+discovery:
+  # full resolves every search result and provides duration/uploader metadata.
+  # Use flat only for a fast title-only inventory.
+  metadata_mode: full
+  max_results_per_query: 40
+  sleep_requests_sec: 1.5
+  retries: 3
+
+filters:
+  min_duration_sec: 20
+  max_duration_sec: 10800
+  reject_unknown_duration: false
+  min_view_count: 0
+  max_age_limit: 0
+  max_videos_per_uploader: 12
+  max_total_videos: 0
+  require_any_text_patterns:
+    - "足球|足坛|球赛|射门|扑救|门将|点球|任意球|角球|比赛|球员"
+    - "football|soccer|shot|goalkeeper|penalty|free[ -]?kick|corner|match"
+  exclude_title_patterns:
+    - "实况足球|足球经理|绿茵信仰|FIFA[0-9 ]|EA FC|eFootball"
+    - "手游|网游|游戏解说|游戏实况|生涯模式|大师联赛"
+    - "动画|动漫|漫画|足球小将"
+    - "教学|教程|技巧讲解|球鞋测评|开箱"
+    - "AI生成|AI视频"
+
+download:
+  # Keep source aspect ratio and cap height. Audio is retained for future work.
+  format: "bv*[height<=720]+ba/b[height<=720]/b"
+  merge_output_format: mp4
+  sleep_interval_sec: 5
+  max_sleep_interval_sec: 12
+  sleep_requests_sec: 1.5
+  concurrent_fragments: 1
+  retries: 5
+  fragment_retries: 5
+  write_thumbnail: false
+
+# The same BVID found by multiple queries is downloaded once. Labels below are
+# search provenance only, not supervised event labels.
+queries:
+  - label: full_match
+    group: context
+    query: 足球比赛 全场 录像
+    max_results: 60
+  - label: full_match
+    group: context
+    query: 业余足球 比赛 全场
+    max_results: 60
+  - label: full_match
+    group: context
+    query: 青少年足球 比赛 全场
+  - label: shot
+    group: event
+    query: 足球 射门 比赛
+  - label: shot
+    group: event
+    query: 足球 禁区 射门
+  - label: save
+    group: event
+    query: 足球 门将 扑救 比赛
+  - label: save
+    group: event
+    query: 守门员 扑救 集锦
+  - label: penalty
+    group: set_piece
+    query: 足球 点球 比赛
+  - label: penalty
+    group: set_piece
+    query: 足球 点球大战
+  - label: free_kick
+    group: set_piece
+    query: 足球 任意球 比赛
+  - label: corner
+    group: set_piece
+    query: 足球 角球 比赛
+  - label: set_piece
+    group: set_piece
+    query: 足球 罚球 比赛
+  - label: set_piece
+    group: set_piece
+    query: 足球 定位球 比赛
+  - label: goal
+    group: event
+    query: 足球 进球 比赛
+  - label: cross
+    group: action
+    query: 足球 传中 比赛
+  - label: counter_attack
+    group: action
+    query: 足球 快速反击 比赛
+  - label: tackle_interception
+    group: action
+    query: 足球 抢断 拦截 比赛
+  - label: dribble
+    group: action
+    query: 足球 过人 突破 比赛
+  - label: goalkeeper
+    group: role
+    query: 足球 门将 比赛 第一视角

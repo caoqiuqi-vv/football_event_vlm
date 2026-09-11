@@ -1,0 +1,189 @@
+当前没有真正建模运动
+现在的 object 分支做的是：
+每帧 ball top-k patches → ball token
+每帧 goal top-k patches → goal token
+[ball token, goal token, ball-goal特征差]
+                 ↓
+               GRU
+                 ↓
+        clip-level residual
+这里有几个问题。
+1. 时间采样严重不足
+16帧覆盖10秒，大约每0.67秒一帧。
+但射门过程通常是：
+触球 → 球快速移动 → 门将反应/扑救
+核心过程可能不足1秒。当前采样最多只看到一两帧，难以可靠判断：
+- 球的速度和方向；
+- 球是否朝向球门；
+- 人是否完成触球；
+- 门将是否产生有效阻挡；
+- 球是传球、解围还是射门。
+GRU不能从不存在的时间信息中恢复运动。
+2. ball_token-goal_token 不是几何关系
+当前计算的是两个DINO特征向量之差，不是：
+- 球与球门的图像坐标距离；
+- 球的运动方向是否指向球门；
+- 球是否穿越禁区/球门区域；
+- 球与最近球员的距离变化；
+- 门将与球的相对运动。
+DINO token可能隐式包含位置，但经过top-k加权池化后，显式几何信息基本丢失。
+3. 缺少人和门将信息
+当前 OBJECT_NAMES=("ball","goal")，球门Teacher虽然能检测person，但训练时只取goal类别。
+然而：
+- shot 的关键证据是“人—球接触 + 球快速离开”；
+- save 的关键证据是“球—门将—球门”的关系；
+- set-piece 是“静止球 + 执行者接近/触球”；
+- 普通传球同样有球和人，只有运动关系才能区分。
+只看球和球门存在性不足以区分事件与正常比赛。
+4. 每帧固定选择top-k，即使没有目标
+当前每个对象每帧固定选约108个patch。即使：
+- 球不可见；
+- 球门不在画面；
+- heatmap置信度很低；
+仍然会生成ball/goal token。这会让辅助分支在普通背景中构造虚假的object关系，可能增加dense FP。
+需要显式的：
+- object presence；
+- visibility confidence；
+- no-object token；
+- 不确定度门控。
+5. 没有改善逐帧定位
+object temporal attention虽然内部知道哪些帧重要，但最后只生成 [B,C] 的clip residual，没有生成 [B,T,C] 的frame residual。
+因此：
+final_clip_logits = anchor_clip_logits + object_residual
+frame_event_logits = 原anchor frame logits
+这解释了为什么当前结构最多改善窗口排序，不能改善事件发生时间。
+当前结果已经反映了这个问题
+Epoch 1呈现：
+- object heatmap top-1：约73%，说明定位辅助任务确实学动了；
+- 但事件clip mAP几乎完全不变；
+- recall-floor macro precision还略降；
+- object residual平均只有约0.066。
+这说明：
+“找到目标”到“理解目标运动并识别事件”之间的桥梁目前较弱。
+
+当然，最终仍需dense评测确认它是否压制了一部分背景FP，但仅凭当前结构，很难期待显著提升高召回下的precision。
+推荐结构：Object Motion Evidence Adapter
+保留 fromlast_e8/best.pt 作为强anchor，但将当前object分支升级为真正的运动关系分支。
+                     原低帧率全局分支
+16帧/10秒 ── DINO ── 原时序头 ─────────────→ anchor clip/frame logits
+                 │
+                 └─ patch tokens
+                         │
+              ball/goal/person heatmap + presence
+                         │
+               object位置、区域token、不确定度
+                         │
+高帧率局部分支：中心±2秒，8FPS，约33帧
+                         │
+      球轨迹 + 人球交互 + 球门关系 + 相机运动补偿
+                         │
+              Object Relation Transformer
+                    ┌────┴────┐
+          frame residual     clip residual
+                    │           │
+          final frame logits  final clip logits
+1. 双时间尺度采样
+保留原anchor输入：
+- 16帧/10秒，负责比赛上下文。
+增加运动分支：
+- 候选中心 [-2s,+2s]；
+- 至少8 FPS，建议33帧；
+- 720×1280或不低于512×896；
+- 重点捕捉触球、球飞行和门将反应。
+这是最重要的结构变化。没有高时间分辨率，无法可靠建模足球运动。
+2. 增加 person/interaction 监督
+训练Teacher至少生成：
+- ball heatmap；
+- goal heatmap；
+- person heatmap；
+- object presence；
+- box/中心坐标；
+- detection confidence。
+不需要把Detector作为推理前置依赖。推理时仍由学生从DINO patch token预测这些信息。
+对于人不必做身份跟踪，先提取：
+- 距球最近的若干person token；
+- 靠近球门的人群token；
+- person-ball attention；
+- goal附近keeper-candidate token。
+这样比完整球员检测/跟踪更稳，也更符合你的“不依赖前置检测”要求。
+3. 显式保留几何与运动
+从学生heatmap计算可微分的：
+ball_xy(t), goal_box(t), person_xy_k(t)
+ball_confidence(t), goal_visibility(t)
+进一步构造：
+ball_velocity
+ball_acceleration
+ball→goal direction
+ball-goal normalized distance
+nearest-person→ball distance
+person-ball distance change
+goal-area crowd motion
+坐标最好相对球门框或场地区域归一化，减少镜头平移、变焦的影响。
+对于球门不可见的片段，使用confidence gate自动回退到外观和全局时序证据。
+4. 同时输出 frame residual 和 clip residual
+建议：
+Δframe_logits ∈ [-1,+1]
+Δclip_logits  ∈ [-1,+1]
+
+final_frame = anchor_frame + confidence_gate × Δframe
+final_clip  = anchor_clip  + confidence_gate × Δclip
+残差头继续零初始化，以保证初始结果完全复现anchor。
+不同类别采用不同关系query：
+- shot query：人球接触、球快速远离、朝向球门；
+- save query：球进入门区、门将/人形区域动作、球运动改变；
+- set-piece query：静止球、执行者接近、触球、哨声上下文。
+仍使用多标签sigmoid，允许free-kick shot、shot+save共现。
+5. 改成dense-mode训练
+当前事件中心采样会让模型依赖“事件在clip中间”的先验。新训练应包括：
+- GT在窗口内均匀位置采样；
+- GT靠近窗口边缘；
+- 全视频规则dense窗口；
+- object-rich negatives：
+  - 普通传球；
+  - 禁区内混战；
+  - 解围；
+  - 门将持球；
+  - 球门可见但无射门；
+- 来自人工审核的真实高分FP；
+- 漏标/不确定片段不能作为强负样本。
+这里不是传统无约束hard-negative mining，而是与部署分布一致的候选监督。
+6. 损失设计
+建议使用：
+L =
+  L_event_multilabel
++ λ1 L_object_heatmap
++ λ2 L_object_presence
++ λ3 L_object_coordinate
++ λ4 L_motion_consistency
++ λ5 L_frame_localization
++ λ6 L_dense_ranking
++ λ7 L_positive_retention
+其中 L_dense_ranking 应直接优化：
+同视频中，GT事件窗口的分数高于具有相似ball/goal可见度的非事件窗口。
+
+这样才能迫使模型学习“运动关系”，而不是仅学习“画面中有没有球和球门”。
+7. 分阶段训练
+推荐三步：
+1. Object warm-up
+   - 冻结anchor和DINO；
+   - 训练heatmap、presence、坐标和短时轨迹；
+   - 必须分别报告ball与goal指标，不能只看聚合top-1。
+2. Event relation训练
+   - 冻结anchor；
+   - 训练object motion adapter、frame/clip residual；
+   - 使用dense窗口和审核FP。
+3. 有限表征微调
+   - 解冻DINO最后4个block；
+   - 前层LoRA；
+   - 很低学习率；
+   - 保留anchor蒸馏和positive retention。
+第三阶段才真正让检测监督改变DINO的局部表征，实现“强制基础网络关注目标”。
+判断结论
+当前实验仍值得完成一次Epoch 1 dense评测，因为它可能作为轻量reranker减少部分FP。但从结构上看：
+- 它能学习球/球门位置；
+- 能做有限的clip重排序；
+- 不能可靠学习球的快速运动；
+- 没有建模人球交互；
+- 不改善frame定位；
+- 没有真正把检测监督注入基础DINO和原时序头。
+因此，当前结构不完全符合你的最终目标。更合理的下一版不是继续扩大heatmap权重，而是升级为“高帧率对象轨迹 + 人球门关系 + frame/clip双残差 + dense训练”的 Object Motion Evidence Adapter。

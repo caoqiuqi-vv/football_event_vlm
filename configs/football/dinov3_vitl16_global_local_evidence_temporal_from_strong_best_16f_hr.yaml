@@ -1,0 +1,153 @@
+output_dir: outputs/football_events/vitl16_global_local_evidence_temporal_from_strong_best_16f_hr
+device: cuda:0
+gpu_ids: [0, 1, 2, 3]
+seed: 42
+deterministic: true
+
+task:
+  label_schema: set_piece
+
+data:
+  mode: long_videos
+  long_video:
+    roots:
+      - source: xbotgo_0608
+        videos_dir: /mnt/data_16t/football/raw_video_720P
+        annotations_dir: /home/new_users/qiuqi/code/football_events_human_repair
+    split_files:
+      train:
+        - configs/football/splits/vitl16_lvd1689m_set_piece_seed42_162videos/train_video_ids.txt
+      val:
+        - configs/football/splits/vitl16_lvd1689m_set_piece_seed42_162videos/val_video_ids.txt
+    auto_split:
+      enabled: false
+      val_ratio: 0.2
+      seed: 42
+    negative_ratio: 5.0
+    negative_ratio_by_split:
+      train: 5.0
+      val: 2.0
+    negative_per_video: 0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    hard_negative:
+      enabled: false
+      manifest: ""
+      min_score: 0.0
+      max_per_video: 0
+      safety_margin_sec: 8.0
+      include_in_val: false
+  num_workers_per_gpu: 2
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 1
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+
+video:
+  num_frames: 16
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 1.5
+  image_size: [640, 1120]
+  hflip_prob: 0.5
+
+spatial_crop:
+  mode: none
+
+detection_hint:
+  enabled: false
+
+model:
+  backbone: dinov3_vitl16
+  weights: checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+  init_checkpoint: outputs/football_events/vitl16_strong_lora12_mlp_16f_hr_e1/best.pt
+  init_checkpoint_strict: false
+  pretrained: true
+  freeze_backbone: true
+  freeze_loaded_backbone: true
+  freeze_global_branch: true
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  frame_feature_mode: last_cls_patch_mean
+  temporal_fusion: cls_transformer
+  hidden_dim: 512
+  temporal_layers: 4
+  temporal_heads: 8
+  dropout: 0.1
+  view_fusion: single
+  gradient_checkpointing: true
+  class_evidence:
+    enabled: true
+    mode: global_local_temporal
+    attention_dim: 128
+    queries_per_class: 3
+    return_attention_maps: false
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_last_blocks: 12
+    target_modules: [attn.qkv, attn.proj, mlp.fc1, mlp.fc2]
+    train_norm: true
+
+cache:
+  enabled: false
+  dir: outputs/football_dino_features/vitl16_global_local_evidence_temporal_from_strong_best_16f_hr
+  batch_size: 1
+  rebuild: false
+
+train:
+  epochs: 8
+  per_gpu_batch_size: 8
+  grad_accum_steps: 2
+  lr_per_gpu: 0.0000125
+  # New spatial queries/fusion must learn faster than the already-strong copied
+  # temporal representation and classifier.
+  class_evidence_local_lr_per_gpu: 0.000025
+  class_evidence_temporal_lr_per_gpu: 0.000005
+  backbone_lr_per_gpu: 0.0
+  weight_decay: 0.03
+  pos_weight: [1.0, 2.5, 4.0]
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  clip_loss_weight: 1.0
+  clip_loss_balance: all
+  amp: true
+  amp_dtype: bf16
+  log_interval: 20
+  save_epoch_checkpoints: true
+  checkpoint_selection: tuned_macro_precision_at_recall_floor
+  checkpoint_min_recall: 0.75
+  class_evidence_query_diversity_loss_weight: 0.01
+  # No logit correction, teacher residual, or retention shortcut: the event
+  # decision must come directly from the new global-local temporal features.
+  global_conditioned_correction_loss_weight: 0.0
+  positive_retention_loss_weight: 0.0
+  frame_det_loss_weight: 0.0
+  early_stopping:
+    enabled: true
+    monitor: tuned_mAP
+    min_epoch: 2
+    patience: 2
+    min_delta: 0.002
+  resume:
+    enabled: false
+    checkpoint: ""
+    strict: true
+    load_optimizer: false
+    load_scheduler: false
+    load_scaler: false
+
+eval:
+  threshold: 0.5
+  per_gpu_batch_size: 8
+  tuned_min_recall:
+    shot: 0.84
+    save: 0.78
+    set_piece: 0.65

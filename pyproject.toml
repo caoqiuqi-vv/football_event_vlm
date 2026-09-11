@@ -1,0 +1,51 @@
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+files = "dinov3"
+exclude = '''(?x)(
+  ^dinov3/tests/([^/]+/)*test_.*\.py$  # Unit tests
+)'''
+
+[tool.pylint.master]
+persistent = false
+score = false
+
+[tool.pylint.messages_control]
+disable = "all"
+enable = [
+  "miscellaneous",
+  "similarities",
+]
+
+[tool.pylint.similarities]
+ignore-comments = true
+ignore-docstrings = true
+ignore-imports = true
+min-similarity-lines = 8
+
+[tool.pylint.reports]
+reports = false
+
+[tool.pylint.miscellaneous]
+notes = [
+  "FIXME",
+  "XXX",
+  "TODO",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+ignore = ["E203", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"hubconf.py" = ["F401"]
+
+# The root suite covers the shared football implementation. Independent projects
+# can run their suites by giving an explicit path; runtime/archive trees are not tests.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["archive", "outputs", "checkpoints", "logs", "node_modules", ".git", ".venv"]

@@ -1,0 +1,10 @@
+all_annotation_count: 190
+thirdparty18_count: 18
+long6_count: 6
+external_test_count: 23
+external_overlap_count: 1
+train_rest_count: 167
+train_fit_count: 147
+calibration_20_count: 20
+annotation_root: /mnt/data_16t/football/football_events_human_repair
+policy: external_test_video_ids.txt is the fixed external test holdout; do not use it for training, checkpoint selection, threshold tuning, fusion tuning, or calibration. Internal calibration_20 is selected only from the remaining train_rest ids.

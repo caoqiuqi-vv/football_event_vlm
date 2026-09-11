@@ -1,0 +1,366 @@
+output_dir: outputs/football_events/vitl16_online_grid_dual_e16_512_lora_from_ep1_partial_eval_v2
+device: cuda:0
+gpu_ids:
+- 0
+- 1
+- 2
+- 3
+seed: 42
+deterministic: true
+task:
+  label_schema: set_piece
+data:
+  mode: long_videos
+  long_video:
+    roots:
+    - source: xbotgo_0608
+      videos_dir: /mnt/data_16t/football/raw_video_720P
+      annotations_dir: /mnt/data_16t/football/football_events_human_repair
+      raw_annotations_dir: /mnt/data_16t/football/football_events_raw
+      video_path_overrides:
+        '1985527741064613890': /mnt/data_16t/football/raw_video_hq_720P/1985527741064613890.mp4
+    split_files:
+      train:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/train_video_ids.txt
+      val:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/internal_val_video_ids.txt
+      external:
+      - configs/football/splits/thirdparty18_test_long15_val_no_pn_train/thirdparty18_test_video_ids.txt
+    auto_split:
+      enabled: false
+    negative_ratio: 3.0
+    negative_ratio_by_split:
+      train: 3.0
+      val: 2.0
+      external: 2.0
+    negative_per_video: 0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    hard_negative:
+      enabled: false
+      manifest: ''
+      temporal_jitter_sec: 0.25
+      loss_weight: 1.0
+      include_in_val: false
+    online_simulation:
+      enabled: true
+      window_stride_sec: 5.0
+      primary_positive_min_sec: 3.0
+      primary_positive_max_sec: 7.0
+      grid_frame_loss_weight: 0.5
+      edge_clip_loss_weight: 0.35
+      edge_frame_loss_weight: 0.5
+      near_event_ignore_sec: 2.0
+      near_event_max_sec: 15.0
+      near_event_anchor_gap_min_sec: 5.0
+      near_event_anchor_gap_max_sec: 15.0
+      near_event_negative_weight: 0.5
+      background_max_attempts: 256
+      event_pairs_per_epoch: 4800
+      clean_background_windows_per_epoch: 4800
+  num_workers_per_gpu: 3
+  pin_memory: true
+  persistent_workers: false
+  prefetch_factor: 2
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+raw_set_piece_supervision:
+  enabled: true
+  rejected_ignore_enabled: true
+  rejected_ignore_margin_sec: 5.0
+  context_span_min_duration_sec: 0.5
+video:
+  num_frames: 24
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 1.0
+  positive_window_strategy: anchor3_7_jitter
+  positive_anchor_min_sec: 3.0
+  positive_anchor_max_sec: 7.0
+  sampling_duration: 10.0
+  sampling_temporal_jitter_sec: 0.0
+  image_size:
+  - 512
+  - 896
+  hflip_prob: 0.5
+spatial_crop:
+  mode: none
+model:
+  backbone: dinov3_vitl16
+  weights: checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+  init_checkpoint: /home/new_users/qiuqi/code/dinov3-main/outputs/football_events/vitl16_online_grid_dual_e16_512_from_last6r8/best.pt
+  init_checkpoint_strict: false
+  pretrained: true
+  freeze_backbone: true
+  freeze_loaded_backbone: false
+  finetune_last_blocks: 0
+  controlled_online_train_scope: lora_temporal_heads
+  backbone_frame_chunk_size: 12
+  frame_feature_dim: 2048
+  frame_feature_mode: multi_layer_cls_patch_attn
+  frame_feature_layers:
+  - -8
+  - -4
+  - -1
+  frame_patch_pool: attn
+  temporal_fusion: temporal_stem_bottleneck_transformer
+  hidden_dim: 384
+  temporal_layers: 2
+  temporal_heads: 6
+  dropout: 0.1
+  gradient_checkpointing: true
+  gradient_checkpointing_mode: trainable_blocks
+  temporal_stem:
+    kernel_size: 3
+    dilations:
+    - 1
+    - 2
+    - 4
+    bottleneck_frames: 8
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_last_blocks: 6
+    target_modules:
+    - attn.qkv
+    - attn.proj
+    train_norm: false
+  response_curve_primary:
+    enabled: false
+    pooling: topk_lse
+    topk: 3
+    blend_weight: 0.0
+    curve_head: class_specific
+    curve_hidden_dim: 128
+    curve_kernel_size: 5
+    curve_dropout: 0.1
+  class_evidence:
+    enabled: true
+    mode: independent_preprojection
+    hidden_dim: 256
+    queries_per_class: 2
+    temporal_layers: 1
+    temporal_heads: 4
+    bottleneck_frames: 8
+    anti_erasure_no_evidence: true
+    return_attention_maps: false
+cache:
+  enabled: false
+train:
+  epochs: 2
+  scheduler_epochs: 2
+  per_gpu_batch_size: 10
+  grad_accum_steps: 2
+  lr_per_gpu: 1.25e-05
+  temporal_lr_per_gpu: 1.25e-05
+  head_lr_per_gpu: 1.875e-05
+  backbone_lr_per_gpu: 2.5e-07
+  weight_decay: 0.05
+  warmup:
+    ratio: 0.05
+  pos_weight:
+  - 1.0
+  - 2.5
+  - 4.0
+  pos_weight_max: 50.0
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 40
+  save_epoch_checkpoints: false
+  save_pre_eval_recovery: true
+  checkpoint_selection: tuned_mixed_objective
+  checkpoint_min_recall: 0.85
+  early_stopping:
+    enabled: true
+    monitor: selection_score
+    min_epoch: 2
+    patience: 2
+    min_delta: 0.0
+  resume:
+    enabled: false
+    checkpoint: ''
+    strict: true
+    load_optimizer: true
+    reset_optimizer_lr: true
+    load_scheduler: false
+    reset_scheduler: true
+    load_scaler: true
+    load_ema: true
+    min_lr_fraction_of_config: 0.05
+  clip_loss_type: bce
+  frame_det_loss_weight: 0.18
+  temporal_clip_loss_weight: 0.0
+  frame_det_loss_type: focal_bce
+  frame_pos_weight:
+    shot: 3.0
+    save: 4.5
+    set_piece: 2.0
+  frame_heatmap_loss_weight: 0.35
+  frame_mil_loss_weight: 0.18
+  frame_rank_loss_weight: 0.12
+  frame_mil_topk: 3
+  frame_eval_topk: 4
+  frame_rank_pos_threshold: 0.5
+  frame_rank_neg_threshold: 0.05
+  frame_rank_margin: 1.25
+  frame_label_sigma_sec:
+    shot: 0.8
+    save: 0.8
+    set_piece: 1.8
+  frame_label_ignore_radius_sec:
+    shot: 4.5
+    save: 4.5
+    set_piece: 6.0
+  frame_loss_class_weight:
+    shot: 1.0
+    save: 0.8
+    set_piece: 0.4
+  response_curve_frame_loss_weight: 0.0
+  response_curve_frame_loss_class_weight:
+    shot: 1.0
+    save: 0.9
+    set_piece: 0.25
+  clean_negative_rank_loss_weight: 0.2
+  clean_negative_rank_branch: fused
+  clean_negative_rank_labels:
+  - shot
+  - save
+  clean_negative_rank_margin: 1.0
+  clean_negative_rank_pairs_per_positive: 2
+  clean_negative_rank_temperature: 1.0
+  clean_negative_rank_require_all_labels: true
+  hard_negative_rank_loss_weight: 0.0
+  online_hard_negative_loss_weight: 0.0
+  online_hard_negative_rank_loss_weight: 0.0
+  clean_positive_logit_margin_loss_weight: 0.1
+  clean_positive_logit_margin:
+    shot: 0.25
+    save: 0.25
+    set_piece: 0.0
+  clean_positive_logit_margin_labels:
+  - shot
+  - save
+  clean_positive_logit_margin_branch: fused
+  class_evidence_local_lr_per_gpu: 6.25e-06
+  class_evidence_temporal_lr_per_gpu: 6.25e-06
+  class_evidence_head_lr_per_gpu: 9.375e-06
+  class_evidence_no_evidence_loss_weight: 0.0
+  class_evidence_gate_lr_per_gpu: 0.00125
+  class_evidence_saliency_rank_weight: 0.0
+  class_evidence_saliency_rank_margin: 0.1
+  class_evidence_saliency_rank_topk: 3
+  class_evidence_saliency_rank_support_threshold: 0.1
+  class_evidence_saliency_rank_pairs_per_positive: 2
+  class_evidence_cross_window_weight: 0.0
+  class_evidence_cross_window_tolerance_sec: 0.24
+  class_evidence_signed_causal_loss_weight: 0.0
+  class_evidence_signed_causal_positive_margin: 0.15
+  class_evidence_signed_causal_negative_margin: 0.1
+  class_evidence_signed_causal_negative_weight: 0.5
+  class_evidence_signed_causal_temperature: 0.5
+  class_evidence_no_evidence_balance: per_class_equal_event_background
+  event_min_target: 0.5
+  background_max_target: 0.1
+  require_both_sides_per_class: true
+  global_ddp_balance: true
+  frame_heatmap_aggregation: per_positive_core_context
+  frame_heatmap_core_min_target: 0.5
+  frame_heatmap_context_max_target: 0.1
+  class_evidence_query_diversity_loss_weight: 0.0
+  class_evidence_counterfactual_loss_weight: 0.0
+  ddp_find_unused_parameters: false
+  online_pair_consistency:
+    enabled: true
+    clip_weight: 0.05
+    response_weight: 0.01
+    start_epoch: 1
+    warmup_epochs: 0.25
+    teacher_logit_floor: 0.0
+    smooth_l1_beta: 0.5
+    response_support_radius_sec: 2.0
+    strict_metadata: true
+    require_pair_each_batch: true
+    require_response_curve: true
+    allow_frame_logits_fallback: false
+  ema:
+    enabled: true
+    decay: 0.995
+    evaluate: true
+    evaluate_raw: false
+    selection_source: ema
+    save_best_as_ema: true
+  ddp_suppress_non_main_stdout: true
+  print_per_video_metrics: false
+  clip_loss_balance: per_class_equal_pos_neg
+  global_backbone_lr_per_gpu: 2.5e-07
+  local_backbone_lr_per_gpu: 2.5e-07
+  global_backbone_lr: 1.0e-06
+  local_backbone_lr: 1.0e-06
+eval:
+  threshold: 0.5
+  per_gpu_batch_size: 2
+  backbone_frame_chunk_size: 0
+  tuned_min_recall:
+    shot: 0.85
+  tuned_min_recall_by_class:
+    shot: 0.85
+    save: null
+    set_piece: null
+  tuned_objective_by_class:
+    shot: precision_at_recall_floor
+    save: f1
+    set_piece: f1
+  external_audit:
+    enabled: false
+    split: external
+    online_mode:
+      enabled: true
+      window_stride_sec: 5.0
+      nms_radius_sec: 5.0
+      tolerance_sec: 5.0
+      capped_clip_sec: 10.0
+      score_fusion: clip_x_frame_peak
+  online_validation:
+    enabled: true
+    window_stride_sec: 5.0
+    nms_radius_sec: 5.0
+    tolerance_sec: 5.0
+    score_fusion: clip_x_frame_peak
+    use_for_checkpoint_selection: true
+    tuned_objective_by_class:
+      shot: precision_at_recall_floor
+      save: f1
+      set_piece: f1
+    tuned_min_recall_by_class:
+      shot: 0.85
+      save: null
+      set_piece: null
+experiment_notes:
+  purpose_e16_grid_dual: 'E1.6-512 (2026-08-27) round-1 supervision fix at 512x896
+    vs vitl16_controlled_online_highres720_last6r8: (1) every sampled event trains
+    the exact eval-grid window pair (anchor at r and r+5s, r = anchor mod 5), closing
+    the [2,3)/[7,8) position blind spot; a canonical 3-7s window is kept for stable
+    frame localization. Grid windows keep clip weight 1.0; frame weight 0.5 outside
+    the canonical band. (2) online evaluation fuses the event score: detection/NMS
+    score and timestamp both derive from sigmoid(frame peak) * sigmoid(clip logit).
+    (3) LoRA is trainable (scope lora_temporal_heads); init from the 720p epoch-1 online
+    best. No hard FP mining, no eval context-ignore, strict 1:1 tolerance 5s unchanged;
+    anchor-position buckets / peak error / near-duplicate FP / 2s-localization recall
+    are added as diagnostics only.'
+  init_protocol: Warm-start from vitl16_controlled_online_highres720_last6r8/best.pt
+    (epoch-1 EMA online best); fresh optimizer/scheduler/EMA; LoRA last6/r8 trainable (lora_temporal_heads).
+  learning_rate_protocol: Identical to the 720p controlled run (lr 1.25e-5, temporal
+    1.25e-5, head 1.875e-5, evidence 6.25e-6/9.375e-6 per GPU); LoRA global LR 1e-6 with independent evidence head learning rates.
+  effective_batch: 10 per GPU x 4 DDP ranks x 2 accumulation = 80 (2 event groups
+    per micro-batch; raised from 60 for GPU efficiency, LR unchanged)
+  acceptance_criteria: 'vs 720p epoch-1 baseline (shot P 0.2945 / R 0.8518, FP 757,
+    selection 0.33663): shot P@R85 above 0.2945 with FP below 757; anchor bucket [2,3)
+    recall clearly improved; peak error P90 and near-duplicate FP down; save/set_piece
+    AP not degraded; online selection score > 0.33663.'
