@@ -69,7 +69,19 @@ from football_object_spatial_aux import (
     ObjectTeacherTargetProvider,
     object_teacher_heatmap_loss,
 )
+from football_events.ball_goal_relation import (
+    RELATION_NAMES,
+    BallGoalRelationTargetProvider,
+    ball_goal_relation_aux_loss,
+)
 from football_online_object_teacher import OnlineObjectTeacherTargeter
+from football_events.mechanism_a import (
+    gradient_alignment,
+    shared_lora_named_parameters,
+    should_measure_gradient_alignment,
+    validate_mechanism_a_config,
+)
+from football_events.tracked_ball_teacher import TrackedBallTargetProvider
 
 
 LABEL_SCHEMAS = {
@@ -1649,9 +1661,17 @@ def frame_supervision_enabled(cfg: Any) -> bool:
     )
 
 
-def object_teacher_provider_from_config(cfg: Any) -> ObjectTeacherTargetProvider | None:
+def object_teacher_provider_from_config(
+    cfg: Any,
+) -> ObjectTeacherTargetProvider | TrackedBallTargetProvider | BallGoalRelationTargetProvider | None:
     aux_cfg = cfg.model.get("object_spatial_aux", ConfigDict())
     if not bool(aux_cfg.get("enabled", False)):
+        return None
+    object_weight = float(cfg.train.get("object_heatmap_loss_weight", 0.0) or 0.0)
+    relation_weight = float(
+        cfg.train.get("ball_goal_relation_loss_weight", 0.0) or 0.0
+    )
+    if object_weight <= 0.0 and relation_weight <= 0.0:
         return None
     index_root = str(aux_cfg.get("teacher_index_root", "") or "")
     if not index_root:
@@ -1663,6 +1683,55 @@ def object_teacher_provider_from_config(cfg: Any) -> ObjectTeacherTargetProvider
         )
     if str(cfg.get("spatial_crop", ConfigDict()).get("mode", "none")) != "none":
         raise ValueError("object teacher heatmaps require the full-image path (spatial_crop.mode=none)")
+    teacher_format = str(aux_cfg.get("teacher_format", "indexed_boxes_v3"))
+    if teacher_format == "tracked_ball_goal_relation_v1":
+        goal_index_root = str(aux_cfg.get("goal_teacher_index_root", "") or "")
+        if not goal_index_root:
+            raise ValueError(
+                "tracked_ball_goal_relation_v1 requires goal_teacher_index_root"
+            )
+        return BallGoalRelationTargetProvider(
+            index_root,
+            goal_index_root,
+            image_size=parse_image_size(cfg.video.image_size),
+            patch_size=int(aux_cfg.get("patch_size", 16)),
+            max_ball_frame_gap_sec=float(aux_cfg.get("max_frame_gap_sec", 0.10)),
+            max_goal_frame_gap_sec=float(aux_cfg.get("goal_max_frame_gap_sec", 0.12)),
+            ball_sigma_patches=float(aux_cfg.get("ball_sigma_patches", 1.25)),
+            goal_dilation_patches=float(aux_cfg.get("goal_dilation_patches", 0.5)),
+            ball_min_confidence=float(aux_cfg.get("min_confidence", 0.0)),
+            ball_min_quality=float(aux_cfg.get("min_quality", 0.0)),
+            relation_min_ball_confidence=float(
+                aux_cfg.get("relation_min_ball_confidence", 0.20)
+            ),
+            relation_min_ball_quality=float(
+                aux_cfg.get("relation_min_ball_quality", 0.75)
+            ),
+            goal_confidence=float(aux_cfg.get("goal_confidence", 0.25)),
+            goal_class_id=int(aux_cfg.get("goal_class_id", 2)),
+            goal_negative_weight=float(aux_cfg.get("goal_negative_weight", 0.05)),
+            teacher_time_offset_sec=float(aux_cfg.get("teacher_time_offset_sec", 0.0)),
+            max_cached_videos=int(aux_cfg.get("max_cached_videos", 4)),
+        )
+    if teacher_format == "tracked_ball_npz_v1":
+        return TrackedBallTargetProvider(
+            index_root,
+            image_size=parse_image_size(cfg.video.image_size),
+            patch_size=int(aux_cfg.get("patch_size", 16)),
+            max_frame_gap_sec=float(aux_cfg.get("max_frame_gap_sec", 0.10)),
+            ball_sigma_patches=float(aux_cfg.get("ball_sigma_patches", 1.25)),
+            min_confidence=float(aux_cfg.get("min_confidence", 0.0)),
+            min_quality=float(aux_cfg.get("min_quality", 0.0)),
+            teacher_time_offset_sec=float(
+                aux_cfg.get("teacher_time_offset_sec", 0.0)
+            ),
+            max_cached_videos=int(aux_cfg.get("max_cached_videos", 4)),
+        )
+    if teacher_format != "indexed_boxes_v3":
+        raise ValueError(
+            "model.object_spatial_aux.teacher_format must be indexed_boxes_v3 "
+            "tracked_ball_npz_v1, or tracked_ball_goal_relation_v1"
+        )
     return ObjectTeacherTargetProvider(
         index_root,
         image_size=parse_image_size(cfg.video.image_size),
@@ -2891,7 +2960,7 @@ class FootballLongVideoDataset(Dataset):
         raw_rejected_ignore_margin_sec: float = 0.0,
         raw_context_span_min_duration_sec: float = 0.25,
         evidence_provider: Any | None = None,
-        object_teacher_provider: ObjectTeacherTargetProvider | None = None,
+        object_teacher_provider: Any | None = None,
     ):
         self.records = records
         self.events_by_video = events_by_video
@@ -3231,9 +3300,12 @@ class FootballLongVideoDataset(Dataset):
                 result["local_frame_targets"] = frame_targets.clone()
                 result["local_frame_target_masks"] = frame_masks.clone()
         if self.object_teacher_provider is not None:
-            object_targets, object_masks = self.object_teacher_provider.empty(self.num_frames)
-            result["object_heatmap_targets"] = object_targets
-            result["object_heatmap_masks"] = object_masks
+            if hasattr(self.object_teacher_provider, "empty_bundle"):
+                result.update(self.object_teacher_provider.empty_bundle(self.num_frames))
+            else:
+                object_targets, object_masks = self.object_teacher_provider.empty(self.num_frames)
+                result["object_heatmap_targets"] = object_targets
+                result["object_heatmap_masks"] = object_masks
         return result
 
     def _getitem_impl(self, index: int) -> dict[str, Any]:
@@ -3726,11 +3798,16 @@ class FootballLongVideoDataset(Dataset):
                 clip_duration=self.clip_duration,
                 num_frames=self.num_frames,
             )
-            object_targets, object_masks = self.object_teacher_provider.targets(
-                record.video_id, absolute_times
-            )
-            result["object_heatmap_targets"] = object_targets
-            result["object_heatmap_masks"] = object_masks
+            if hasattr(self.object_teacher_provider, "target_bundle"):
+                result.update(
+                    self.object_teacher_provider.target_bundle(
+                        record.video_id, absolute_times
+                    )
+                )
+            else:
+                object_targets, object_masks = self.object_teacher_provider.targets(record.video_id, absolute_times)
+                result["object_heatmap_targets"] = object_targets
+                result["object_heatmap_masks"] = object_masks
         return result
 
 
@@ -3765,7 +3842,13 @@ def football_collate(batch: list[dict[str, Any]]) -> dict[str, Any]:
         "cache_key": [item["cache_key"] for item in batch],
         "meta": [item["meta"] for item in batch],
     }
-    for key in ("object_heatmap_targets", "object_heatmap_masks"):
+    for key in (
+        "object_heatmap_targets",
+        "object_heatmap_masks",
+        "ball_goal_relation_targets",
+        "ball_goal_relation_masks",
+        "ball_context_masks",
+    ):
         if key in batch[0]:
             result[key] = torch.stack([item[key] for item in batch], dim=0)
     if "roi_inputs" in batch[0]:
@@ -6472,6 +6555,13 @@ class VideoEventClassifier(nn.Module):
         object_spatial_aux_topk_ratio: float = 0.03,
         object_spatial_aux_temperature: float = 0.7,
         object_spatial_aux_residual_max_delta: float = 1.0,
+        object_spatial_aux_representation_only: bool = False,
+        ball_goal_relation_aux_enabled: bool = False,
+        ball_goal_relation_aux_targets: int = 10,
+        ball_goal_relation_aux_topk_candidates: int = 3,
+        ball_goal_relation_aux_candidate_nms_radius: int = 2,
+        ball_goal_relation_aux_grid_size: Sequence[int] = (),
+        ball_goal_relation_aux_context_radii: Sequence[float] = (1.5, 4.0, 8.0),
         spatial_attention_enabled: bool = False,
         spatial_attention_dim: int = 256,
         spatial_attention_queries_per_class: int = 2,
@@ -7014,6 +7104,9 @@ class VideoEventClassifier(nn.Module):
                 "uniform_event_dual_transformer currently supports model.view_fusion=single only"
             )
         self.object_spatial_aux_enabled = bool(object_spatial_aux_enabled)
+        self.object_spatial_aux_representation_only = bool(
+            object_spatial_aux_representation_only
+        )
         self.object_spatial_aux: ObjectSpatialAuxHead | None = None
         if self.object_spatial_aux_enabled:
             if self.dual_view:
@@ -7031,6 +7124,12 @@ class VideoEventClassifier(nn.Module):
                 topk_ratio=float(object_spatial_aux_topk_ratio),
                 temperature=float(object_spatial_aux_temperature),
                 residual_max_delta=float(object_spatial_aux_residual_max_delta),
+                relation_aux_enabled=bool(ball_goal_relation_aux_enabled),
+                relation_targets=int(ball_goal_relation_aux_targets),
+                relation_topk_candidates=int(ball_goal_relation_aux_topk_candidates),
+                relation_candidate_nms_radius=int(ball_goal_relation_aux_candidate_nms_radius),
+                relation_grid_size=tuple(ball_goal_relation_aux_grid_size),
+                relation_context_radii=tuple(ball_goal_relation_aux_context_radii),
             )
         self.spatial_token_pooling_enabled = bool(spatial_token_pooling_enabled)
         self.spatial_token_pooling_fusion_mode = str(
@@ -9487,9 +9586,14 @@ class VideoEventClassifier(nn.Module):
                 raise RuntimeError(
                     "object spatial aux was enabled but its head or patch tokens are missing"
                 )
-            object_spatial_outputs = self.object_spatial_aux(global_patch_tokens)
-            logits = logits + object_spatial_outputs["residual"]
-            spatial_fused_logits = logits
+            if self.object_spatial_aux_representation_only:
+                object_spatial_outputs = self.object_spatial_aux.predict_representation_aux(
+                    global_outputs["frame_tokens"], global_patch_tokens
+                )
+            else:
+                object_spatial_outputs = self.object_spatial_aux(global_patch_tokens)
+                logits = logits + object_spatial_outputs["residual"]
+                spatial_fused_logits = logits
         if not self.dual_view:
             if return_aux:
                 result = {
@@ -9506,15 +9610,31 @@ class VideoEventClassifier(nn.Module):
                     ),
                 }
                 if object_spatial_outputs is not None:
-                    result.update({
-                        "object_heatmap_logits": object_spatial_outputs["heatmap_logits"],
-                        "object_attention_maps": object_spatial_outputs["attention_maps"],
-                        "object_tokens": object_spatial_outputs["object_tokens"],
-                        "object_class_attention": object_spatial_outputs["class_attention"],
-                        "object_spatial_raw_residual": object_spatial_outputs["raw_residual"],
-                        "object_spatial_residual": object_spatial_outputs["residual"],
-                        "retention_reference_logits": global_logits,
-                    })
+                    result["object_heatmap_logits"] = object_spatial_outputs[
+                        "heatmap_logits"
+                    ]
+                    relation_output_names = {
+                        "relation_logits": "ball_goal_relation_logits",
+                        "context_predictions": "ball_context_predictions",
+                        "context_targets": "ball_context_targets",
+                        "candidate_entropy": "ball_candidate_entropy",
+                        "candidate_indices": "ball_candidate_indices",
+                        "candidate_weights": "ball_candidate_weights",
+                    }
+                    for source_name, output_name in relation_output_names.items():
+                        if source_name in object_spatial_outputs:
+                            result[output_name] = object_spatial_outputs[
+                                source_name
+                            ]
+                    if not self.object_spatial_aux_representation_only:
+                        result.update({
+                            "object_attention_maps": object_spatial_outputs["attention_maps"],
+                            "object_tokens": object_spatial_outputs["object_tokens"],
+                            "object_class_attention": object_spatial_outputs["class_attention"],
+                            "object_spatial_raw_residual": object_spatial_outputs["raw_residual"],
+                            "object_spatial_residual": object_spatial_outputs["residual"],
+                            "retention_reference_logits": global_logits,
+                        })
                 if highres_outputs is not None:
                     result.update({
                         "highres_local_frame_event_logits": highres_outputs[
@@ -10528,6 +10648,9 @@ def make_model(cfg: Any, *, use_cached_features: bool, device: torch.device) -> 
     object_spatial_aux_cfg = cfg.model.get(
         "object_spatial_aux", ConfigDict()
     )
+    ball_goal_relation_aux_cfg = cfg.model.get(
+        "ball_goal_relation_aux", ConfigDict()
+    )
     response_curve_primary_cfg = cfg.model.get(
         "response_curve_primary", ConfigDict()
     )
@@ -10646,6 +10769,30 @@ def make_model(cfg: Any, *, use_cached_features: bool, device: torch.device) -> 
         ),
         object_spatial_aux_residual_max_delta=float(
             object_spatial_aux_cfg.get("residual_max_delta", 1.0)
+        ),
+        object_spatial_aux_representation_only=bool(
+            object_spatial_aux_cfg.get("representation_only", False)
+        ),
+        ball_goal_relation_aux_enabled=bool(
+            ball_goal_relation_aux_cfg.get("enabled", False)
+        ),
+        ball_goal_relation_aux_targets=len(RELATION_NAMES),
+        ball_goal_relation_aux_topk_candidates=int(
+            ball_goal_relation_aux_cfg.get("topk_candidates", 3)
+        ),
+        ball_goal_relation_aux_candidate_nms_radius=int(
+            ball_goal_relation_aux_cfg.get("candidate_nms_radius", 2)
+        ),
+        ball_goal_relation_aux_grid_size=(
+            parse_image_size(cfg.video.image_size)[0]
+            // int(object_spatial_aux_cfg.get("patch_size", 16)),
+            parse_image_size(cfg.video.image_size)[1]
+            // int(object_spatial_aux_cfg.get("patch_size", 16)),
+        ),
+        ball_goal_relation_aux_context_radii=tuple(
+            ball_goal_relation_aux_cfg.get(
+                "context_radii_patches", [1.5, 4.0, 8.0]
+            )
         ),
         spatial_attention_enabled=bool(
             spatial_attention_cfg.get("enabled", False)
@@ -11031,11 +11178,12 @@ def make_model(cfg: Any, *, use_cached_features: bool, device: torch.device) -> 
         "highres_residual",
         "object_spatial_aux",
         "external_evidence_only",
+        "mechanism_a",
     }:
         raise ValueError(
             "model.controlled_online_train_scope must be all, temporal_heads, "
             "lora_temporal_heads, spatial_residual, highres_residual, "
-            "object_spatial_aux, or external_evidence_only"
+            "object_spatial_aux, external_evidence_only, or mechanism_a"
         )
     if controlled_scope != "all":
         temporal_head_prefixes = (
@@ -11054,6 +11202,21 @@ def make_model(cfg: Any, *, use_cached_features: bool, device: torch.device) -> 
             "frame_event_head.",
             "response_curve_head.",
         )
+        mechanism_a_event_prefixes = (
+            "frame_proj.",
+            "temporal.",
+            "head.",
+            "frame_event_head.",
+        )
+        mechanism_a_aux_prefixes = [
+            "object_spatial_aux.heatmap_head.",
+        ]
+        if bool(
+            getattr(model.object_spatial_aux, "relation_aux_enabled", False)
+        ):
+            mechanism_a_aux_prefixes.extend(
+                ["object_spatial_aux.relation_head.", "object_spatial_aux.context_predictor."]
+            )
         trainable_total = 0
         temporal_head_total = 0
         lora_total = 0
@@ -11093,6 +11256,12 @@ def make_model(cfg: Any, *, use_cached_features: bool, device: torch.device) -> 
                         "class_evidence_head.evidence_gates",
                     )
                 )
+            elif controlled_scope == "mechanism_a":
+                allowed = (
+                    is_lora
+                    or name.startswith(mechanism_a_event_prefixes)
+                    or name.startswith(tuple(mechanism_a_aux_prefixes))
+                )
             else:
                 allowed = is_temporal_head or (
                     controlled_scope == "lora_temporal_heads" and is_lora
@@ -11113,6 +11282,23 @@ def make_model(cfg: Any, *, use_cached_features: bool, device: torch.device) -> 
             )
         if controlled_scope == "lora_temporal_heads" and lora_total <= 0:
             raise RuntimeError("stage2 requested trainable LoRA but no LoRA parameters are active")
+        if controlled_scope == "mechanism_a":
+            trainable_names = [
+                name
+                for name, parameter in model.named_parameters()
+                if parameter.requires_grad
+            ]
+            for required_prefix in mechanism_a_event_prefixes + tuple(mechanism_a_aux_prefixes):
+                if not any(
+                    name.startswith(required_prefix) for name in trainable_names
+                ):
+                    raise RuntimeError(
+                        f"mechanism_a has no trainable {required_prefix} parameters"
+                    )
+            if lora_total <= 0:
+                raise RuntimeError(
+                    "mechanism_a requires trainable shared DINO LoRA parameters"
+                )
         if controlled_scope == "external_evidence_only":
             evidence_names = [
                 name
@@ -12551,6 +12737,7 @@ def training_requires_aux_outputs(
             "set_piece_subtype_loss_weight",
             "raw_context_span_loss_weight",
             "object_heatmap_loss_weight",
+            "ball_goal_relation_loss_weight",
             "frame_tail_rank_loss_weight",
         )
     )
@@ -15529,6 +15716,32 @@ def online_event_selection_metrics(
     }
 
 
+def resolve_evaluation_candidate_time_mode(cfg: Any) -> str:
+    """Choose timestamp semantics independently of auxiliary batch fields."""
+
+    eval_cfg = cfg.get("eval", ConfigDict())
+    requested = str(eval_cfg.get("candidate_time_mode", "auto")).strip().lower()
+    if requested not in {"auto", "window_center", "frame_peak"}:
+        raise ValueError(
+            "eval.candidate_time_mode must be auto, window_center, or frame_peak"
+        )
+    if requested != "auto":
+        return requested
+    train_cfg = cfg.get("train", ConfigDict())
+    frame_localizer_trained = any(
+        float(train_cfg.get(key, 0.0) or 0.0) > 0.0
+        for key in (
+            "frame_det_loss_weight",
+            "frame_tail_rank_loss_weight",
+            "spatial_temporal_localization_loss_weight",
+            "structured_frame_temporal_localization_loss_weight",
+        )
+    )
+    # Detection/relation auxiliary targets must never silently switch event
+    # timestamp semantics.  An untrained frame head is not a localizer.
+    return "frame_peak" if frame_localizer_trained else "window_center"
+
+
 @torch.no_grad()
 def evaluate(
     model: nn.Module,
@@ -15540,6 +15753,7 @@ def evaluate(
     online_cache_path: str | Path | None = None,
 ) -> dict[str, Any]:
     model.eval()
+    candidate_time_mode = resolve_evaluation_candidate_time_mode(cfg)
     # Validation may use a larger frozen-backbone frame batch than training.
     # The eval-only override preserves the train-time memory envelope.
     train_backbone_frame_chunk_size = getattr(model, "backbone_frame_chunk_size", None)
@@ -15592,12 +15806,16 @@ def evaluate(
     subtype_target_batches: list[Tensor] = []
     subtype_mask_batches: list[Tensor] = []
     frame_hit_totals = {label: {"hit": 0, "total": 0} for label in LABELS}
+    object_validation_totals: dict[str, float] = {}
+    object_validation_samples = 0
     for batch in loader:
         targets = batch["targets"].to(device, non_blocking=True)
         label_masks = batch["label_masks"].to(device, non_blocking=True)
         need_aux = (
             "frame_targets" in batch
+            or "object_heatmap_targets" in batch
             or collect_temporal_branches
+            or candidate_time_mode == "frame_peak"
             or collect_spatial_branches
             or float(cfg.train.get("set_piece_subtype_loss_weight", 0.0) or 0.0) > 0
         )
@@ -15605,6 +15823,32 @@ def evaluate(
             outputs = forward_model_batch(model, batch, device, return_aux=need_aux)
         if isinstance(outputs, dict):
             logits = outputs["logits"]
+            if (
+                "object_heatmap_targets" in batch
+                and "object_heatmap_logits" in outputs
+            ):
+                _, object_components = object_teacher_heatmap_loss(
+                    outputs, batch, cfg, device
+                )
+                object_batch_size = int(targets.shape[0])
+                object_validation_samples += object_batch_size
+                for key, value in object_components.items():
+                    object_validation_totals[key] = (
+                        object_validation_totals.get(key, 0.0)
+                        + float(value) * object_batch_size
+                    )
+                if (
+                    "ball_goal_relation_targets" in batch
+                    and "ball_goal_relation_logits" in outputs
+                ):
+                    _, relation_components = ball_goal_relation_aux_loss(
+                        outputs, batch, cfg, device
+                    )
+                    for key, value in relation_components.items():
+                        object_validation_totals[key] = (
+                            object_validation_totals.get(key, 0.0)
+                            + float(value) * object_batch_size
+                        )
             if "set_piece_subtype_logits" in outputs:
                 subtype_logit_batches.append(
                     outputs["set_piece_subtype_logits"].float().cpu()
@@ -15680,13 +15924,21 @@ def evaluate(
             )
         frame_times = batch.get("frame_times")
         frame_peak_probs: Tensor | None = None
-        if (
+        frame_peak_available = (
             torch.is_tensor(frame_logits)
             and torch.is_tensor(frame_times)
             and frame_logits.ndim == 3
             and frame_times.ndim == 2
             and frame_logits.shape[:2] == frame_times.shape
-        ):
+        )
+        if candidate_time_mode == "frame_peak":
+            if not frame_peak_available:
+                raise RuntimeError(
+                    "eval candidate_time_mode=frame_peak requires aligned "
+                    "frame_event_logits and frame_times"
+                )
+            assert isinstance(frame_logits, Tensor)
+            assert isinstance(frame_times, Tensor)
             peak_indices = frame_logits.float().argmax(dim=1).cpu()
             candidate_times = torch.gather(frame_times.float().cpu(), 1, peak_indices)
             frame_peak_probs = torch.gather(
@@ -15767,6 +16019,8 @@ def evaluate(
                 if subtype_mask_batches else None
             ),
             "frame_hit_totals": frame_hit_totals,
+            "object_validation_totals": object_validation_totals,
+            "object_validation_samples": object_validation_samples,
         }
         rank_payloads = gather_objects_to_main(local_payload)
         if dist.get_rank() != 0:
@@ -15837,6 +16091,12 @@ def evaluate(
             }
             for label in LABELS
         }
+        object_validation_totals = sum_float_mappings(
+            [item["object_validation_totals"] for item in rank_payloads]
+        )
+        object_validation_samples = sum(
+            int(item["object_validation_samples"]) for item in rank_payloads
+        )
 
     logits_np = torch.cat(all_logits).numpy()
     targets_np = torch.cat(all_targets).numpy().astype(np.int32)
@@ -15997,7 +16257,19 @@ def evaluate(
         },
         "tuned_fbeta_beta": tuned_fbeta_beta,
         "threshold_source": threshold_source,
+        "candidate_time_mode": candidate_time_mode,
     }
+    if object_validation_samples > 0:
+        result["object_localization"] = {
+            key: value / object_validation_samples
+            for key, value in sorted(object_validation_totals.items())
+        }
+        result["object_localization"]["samples"] = object_validation_samples
+        result["object_localization"]["aggregation"] = "sample_weighted"
+        if "ball_goal_relation_loss" in result["object_localization"]:
+            result["ball_goal_relation"] = dict(
+                result["object_localization"]
+            )
     if is_online_val or is_online_external:
         online_cfg = online_metric_cfg
         result["online_event"] = online_event_metrics(
@@ -17057,6 +17329,20 @@ def train(
             f"online_object_teacher enabled device={device} fill=missing_frames",
             flush=True,
         )
+    mechanism_a_cfg = cfg.model.get("mechanism_a", ConfigDict())
+    mechanism_a_enabled = bool(mechanism_a_cfg.get("enabled", False))
+    mechanism_a_shared_parameters = (
+        shared_lora_named_parameters(model) if mechanism_a_enabled else []
+    )
+    if mechanism_a_enabled:
+        shared_parameter_count = sum(
+            parameter.numel() for _, parameter in mechanism_a_shared_parameters
+        )
+        print(
+            "mechanism_a shared_route=backbone_lora "
+            f"tensors={len(mechanism_a_shared_parameters)} params={shared_parameter_count}",
+            flush=True,
+        )
     evidence_health_cfg = cfg.train.get(
         "external_evidence_health_assertions", ConfigDict()
     )
@@ -17106,6 +17392,8 @@ def train(
         num_batches = 0
         data_time_total = 0.0
         step_time_total = 0.0
+        mechanism_a_gradient_measurements = 0
+        mechanism_a_gradient_records: list[dict[str, float | int]] = []
         # Per-optimizer-step group grad norms, refreshed on optimizer steps and
         # printed with the next log line (E1.3 plan 5.2 monitoring).
         latest_grad_norms: dict[str, float] = {}
@@ -19113,6 +19401,7 @@ def train(
                     )
                     step_components.update(frame_tail_components)
                 step_components.update(online_object_teacher_components)
+                object_loss: Tensor | None = None
                 object_heatmap_weight = float(
                     cfg.train.get("object_heatmap_loss_weight", 0.0) or 0.0
                 )
@@ -19124,6 +19413,19 @@ def train(
                     step_components.update(object_components)
                     step_components["weighted_object_heatmap_loss"] = float(
                         (object_heatmap_weight * object_loss.detach()).cpu()
+                    )
+                relation_loss: Tensor | None = None
+                relation_weight = float(
+                    cfg.train.get("ball_goal_relation_loss_weight", 0.0) or 0.0
+                )
+                if isinstance(outputs, dict) and relation_weight > 0:
+                    relation_loss, relation_components = ball_goal_relation_aux_loss(
+                        outputs, batch, cfg, device
+                    )
+                    loss = loss + relation_weight * relation_loss
+                    step_components.update(relation_components)
+                    step_components["weighted_ball_goal_relation_loss"] = float(
+                        (relation_weight * relation_loss.detach()).cpu()
                     )
                 if ema_retention_weight > 0 and teacher_logits is not None:
                     retention_label_names = cfg.train.get(
@@ -19231,6 +19533,89 @@ def train(
                     )
                     loss = loss + pair_consistency_loss
                     step_components.update(pair_consistency_components)
+                diagnostic_aux_loss = (
+                    relation_loss if relation_loss is not None else object_loss
+                )
+                diagnostic_aux_weight = (
+                    relation_weight
+                    if relation_loss is not None
+                    else object_heatmap_weight
+                )
+                diagnostic_valid = (
+                    step_components.get("goal_teacher_frame_fraction", 0.0)
+                    if relation_loss is not None
+                    else step_components.get("object_teacher_valid_fraction", 0.0)
+                )
+                if (
+                    diagnostic_aux_loss is not None
+                    and float(diagnostic_valid) > 0.0
+                    and should_measure_gradient_alignment(
+                        mechanism_a_cfg,
+                        step=step,
+                        measured=mechanism_a_gradient_measurements,
+                    )
+                ):
+                    diagnostics_cfg = mechanism_a_cfg.get(
+                        "gradient_diagnostics", ConfigDict()
+                    )
+                    alignment_metrics = gradient_alignment(
+                        raw_clip_loss,
+                        diagnostic_aux_loss,
+                        mechanism_a_shared_parameters,
+                        object_weight=diagnostic_aux_weight,
+                        require_nonzero=bool(
+                            diagnostics_cfg.get("require_nonzero", True)
+                        ),
+                    )
+                    step_components.update(alignment_metrics)
+                    alignment_record: dict[str, float | int] = {
+                        "epoch": int(epoch),
+                        "step": int(step),
+                        **alignment_metrics,
+                    }
+                    mechanism_a_gradient_records.append(alignment_record)
+                    mechanism_a_gradient_measurements += 1
+                    if is_main_process:
+                        print(
+                            "mechanism_a_gradient_alignment "
+                            + json.dumps(alignment_record, sort_keys=True),
+                            flush=True,
+                        )
+                    max_gradient_measurements = max(
+                        int(
+                            diagnostics_cfg.get(
+                                "max_measurements_per_epoch", 4
+                            )
+                        ),
+                        1,
+                    )
+                    if (
+                        bool(
+                            diagnostics_cfg.get(
+                                "exit_after_max_measurements", False
+                            )
+                        )
+                        and mechanism_a_gradient_measurements
+                        >= max_gradient_measurements
+                    ):
+                        if is_main_process:
+                            save_json(
+                                output_dir / "mechanism_a_gradient_probe.json",
+                                {
+                                    "status": "complete",
+                                    "object_heatmap_loss_weight": object_heatmap_weight,
+                                    "ball_goal_relation_loss_weight": relation_weight,
+                                    "diagnostic_auxiliary": "relation" if relation_loss is not None else "object_heatmap",
+                                    "measurements": mechanism_a_gradient_records,
+                                },
+                            )
+                            print(
+                                "mechanism_a_gradient_probe_complete "
+                                f"measurements={mechanism_a_gradient_measurements} "
+                                f"output={output_dir / 'mechanism_a_gradient_probe.json'}",
+                                flush=True,
+                            )
+                        return
                 loss = loss / int(cfg.train.grad_accum_steps)
             if not bool(torch.isfinite(loss.detach()).all()):
                 nonfinite_components = [
@@ -20666,6 +21051,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config, args.overrides)
+    validate_mechanism_a_config(cfg)
     env_world_size = int(os.environ.get("WORLD_SIZE", "1") or 1)
     local_rank = int(os.environ.get("LOCAL_RANK", "0") or 0)
     if env_world_size > 1:

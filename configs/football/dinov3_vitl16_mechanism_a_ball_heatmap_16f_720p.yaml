@@ -1,0 +1,213 @@
+# Mechanism A: the detector supervises shared DINO LoRA features only.
+# The paired control is produced by overriding:
+#   model.mechanism_a.variant=control train.object_heatmap_loss_weight=0
+output_dir: outputs/football_events/mechanism_a_ball_aux_seed42
+device: cuda:0
+gpu_ids: [0, 1, 2, 3]
+seed: 42
+deterministic: true
+
+task:
+  label_schema: set_piece
+
+data:
+  mode: long_videos
+  long_video:
+    roots:
+      - source: xbotgo_0608
+        videos_dir: /mnt/data_16t/football/raw_video_720P
+        annotations_dir: /mnt/data_16t/football/football_events_human_repair
+    split_files:
+      train:
+        - /mnt/data_7t/qiuqi/dinov3-main/configs/football_longform_v2/experiments/lf_a0_official_fullscale/canonical_train_media_ids.txt
+      val:
+        - configs/football/splits/mechanism_a_20260914/calibration7.txt
+    auto_split:
+      enabled: false
+    negative_ratio: 5.0
+    negative_ratio_by_split:
+      train: 5.0
+      val: 2.0
+    negative_per_video: 0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    hard_negative:
+      enabled: false
+      manifest: ''
+      loss_weight: 1.0
+      include_in_val: false
+  num_workers_per_gpu: 2
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 1
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+
+video:
+  num_frames: 16
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 1.5
+  image_size: [720, 1280]
+  hflip_prob: 0.0
+  dual_sampling: aligned
+
+spatial_crop:
+  mode: none
+
+model:
+  backbone: dinov3_vitl16
+  init_checkpoint: outputs/football_events/vitl16_d7c_fullimage_latest_split_dino_pretrained_lora_ddp_720p_fromlast_e8_20260829/best.pt
+  weights: checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+  init_checkpoint_strict: false
+  pretrained: true
+  gradient_checkpointing: true
+  gradient_checkpointing_mode: full_extractor
+  backbone_frame_chunk_size: 4
+  freeze_backbone: true
+  freeze_loaded_backbone: false
+  freeze_global_branch: false
+  controlled_online_train_scope: mechanism_a
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  frame_feature_mode: last_cls_patch_mean
+  temporal_fusion: cls_transformer
+  hidden_dim: 512
+  temporal_layers: 4
+  temporal_heads: 8
+  dropout: 0.1
+  view_fusion: single
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_last_blocks: 4
+    target_modules: [attn.qkv, attn.proj]
+    train_norm: false
+  mechanism_a:
+    enabled: true
+    variant: object_aux
+    gradient_diagnostics:
+      enabled: false
+      interval_steps: 50
+      max_measurements_per_epoch: 4
+      require_nonzero: true
+  object_spatial_aux:
+    enabled: true
+    representation_only: true
+    teacher_format: tracked_ball_npz_v1
+    teacher_index_root: /mnt/data_7t/qiuqi/football_ball_pseudolabels/yolo_fulltrack_v2_test18heldout/offline_index_v1
+    teacher_time_offset_sec: 0.0
+    patch_size: 16
+    max_frame_gap_sec: 0.10
+    ball_sigma_patches: 1.25
+    min_confidence: 0.0
+    min_quality: 0.0
+    max_cached_videos: 4
+    topk_ratio: 0.03
+    temperature: 0.7
+    temporal_layers: 1
+    residual_max_delta: 1.0
+    negative_weights: [0.02, 0.0]
+    positive_threshold: 0.05
+
+cache:
+  enabled: false
+  dir: outputs/football_dino_features/mechanism_a_unused
+  batch_size: 1
+  rebuild: false
+
+train:
+  epochs: 2
+  per_gpu_batch_size: 1
+  grad_accum_steps: 12
+  # Four-GPU defaults: global head LR=8e-5; shared LoRA LR=1e-5.
+  lr_per_gpu: 2.0e-05
+  backbone_lr_per_gpu: 2.5e-06
+  global_backbone_lr_per_gpu: 2.5e-06
+  temporal_lr_per_gpu: 2.0e-05
+  head_lr_per_gpu: 2.0e-05
+  weight_decay: 0.05
+  pos_weight: [1.0, 2.5, 4.0]
+  pos_weight_max: 50.0
+  clip_loss_type: bce
+  clip_loss_balance: per_class_equal_pos_neg
+  clip_loss_weight: 1.0
+  object_heatmap_loss_weight: 0.45
+  frame_det_loss_weight: 0.0
+  frame_tail_rank_loss_weight: 0.0
+  positive_retention_loss_weight: 0.0
+  hard_negative_rank_loss_weight: 0.0
+  online_hard_negative_loss_weight: 0.0
+  online_hard_negative_rank_loss_weight: 0.0
+  roi_quality_loss_weight: 0.0
+  local_loss_weight: 0.0
+  spatial_clip_loss_weight: 0.0
+  spatial_temporal_localization_loss_weight: 0.0
+  structured_frame_temporal_localization_loss_weight: 0.0
+  spatial_counterfactual_loss_weight: 0.0
+  global_conditioned_correction_loss_weight: 0.0
+  class_evidence_counterfactual_loss_weight: 0.0
+  class_evidence_no_evidence_loss_weight: 0.0
+  class_evidence_signed_causal_loss_weight: 0.0
+  fixed_teacher_logit_guard_weight: 0.0
+  ema_positive_retention_weight: 0.0
+  online_pair_consistency:
+    enabled: false
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 20
+  save_epoch_checkpoints: true
+  checkpoint_selection: online_recall_floor_min_review
+  checkpoint_min_recall: 0.85
+  resume:
+    enabled: false
+    checkpoint: ''
+    strict: true
+    load_optimizer: false
+    load_scheduler: false
+    load_scaler: false
+  ema:
+    enabled: true
+    decay: 0.995
+    evaluate: true
+    evaluate_raw: false
+    selection_source: ema
+    save_best_as_ema: true
+  early_stopping:
+    enabled: false
+  ddp_find_unused_parameters: true
+  ddp_suppress_non_main_stdout: true
+
+eval:
+  threshold: 0.5
+  candidate_time_mode: window_center
+  per_gpu_batch_size: 2
+  tuned_objective: precision
+  tuned_min_recall:
+    shot: 0.90
+    save: 0.85
+    set_piece: 0.85
+  online_validation:
+    enabled: true
+    window_stride_sec: 5.0
+    nms_radius_sec: 5.0
+    tolerance_sec: 5.0
+    score_fusion: clip
+    tune_event_thresholds: true
+    use_for_checkpoint_selection: true
+    tuned_objective: precision
+    tuned_min_recall:
+      shot: 0.90
+      save: 0.85
+      set_piece: 0.85
+    max_threshold_candidates: 401
+
+raw_set_piece_supervision:
+  enabled: false

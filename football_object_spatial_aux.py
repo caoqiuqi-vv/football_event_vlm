@@ -83,7 +83,7 @@ class ObjectTeacherTargetProvider:
         path = self.index_root / f"{video_id}.pt"
         if not path.is_file():
             return None
-        payload = torch.load(path, map_location="cpu", weights_only=False)
+        payload = torch.load(path, map_location="cpu", weights_only=True)
         if not isinstance(payload, dict) or int(payload.get("version", 0)) not in (2, 3):
             raise ValueError(f"unsupported object teacher index: {path}")
         self._cache[video_id] = payload
@@ -181,6 +181,12 @@ class ObjectSpatialAuxHead(nn.Module):
         topk_ratio: float = 0.03,
         temperature: float = 0.7,
         residual_max_delta: float = 1.0,
+        relation_aux_enabled: bool = False,
+        relation_targets: int = 10,
+        relation_topk_candidates: int = 3,
+        relation_candidate_nms_radius: int = 2,
+        relation_grid_size: Sequence[int] = (),
+        relation_context_radii: Sequence[float] = (1.5, 4.0, 8.0),
     ) -> None:
         super().__init__()
         self.topk_ratio = min(max(float(topk_ratio), 1e-4), 1.0)
@@ -189,6 +195,44 @@ class ObjectSpatialAuxHead(nn.Module):
         self.heatmap_head = nn.Sequential(
             nn.LayerNorm(patch_dim), nn.Linear(patch_dim, len(OBJECT_NAMES))
         )
+        self.relation_aux_enabled = bool(relation_aux_enabled)
+        self.relation_topk_candidates = max(int(relation_topk_candidates), 1)
+        self.relation_candidate_nms_radius = max(int(relation_candidate_nms_radius), 0)
+        self.relation_context_radii = tuple(
+            max(float(radius), 0.25) for radius in relation_context_radii
+        )
+        if not self.relation_context_radii:
+            raise ValueError("relation_context_radii must not be empty")
+        grid_size = tuple(int(value) for value in relation_grid_size)
+        if self.relation_aux_enabled and (
+            len(grid_size) != 2 or min(grid_size) <= 0
+        ):
+            raise ValueError(
+                "relation auxiliary head requires relation_grid_size=[height,width]"
+            )
+        self.relation_grid_h = grid_size[0] if grid_size else 0
+        self.relation_grid_w = grid_size[1] if grid_size else 0
+        self.relation_head: nn.Module | None = None
+        self.context_predictor: nn.Module | None = None
+        if self.relation_aux_enabled:
+            relation_hidden = max(hidden_dim // 2, 128)
+            self.relation_head = nn.Sequential(
+                nn.LayerNorm(hidden_dim),
+                nn.Linear(hidden_dim, relation_hidden),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(relation_hidden, int(relation_targets)),
+            )
+            self.context_predictor = nn.Sequential(
+                nn.LayerNorm(hidden_dim),
+                nn.Linear(hidden_dim, relation_hidden),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(
+                    relation_hidden,
+                    len(self.relation_context_radii) * int(patch_dim),
+                ),
+            )
         relation_dim = patch_dim * 3 + len(OBJECT_NAMES) * 3
         self.relation_proj = nn.Sequential(
             nn.LayerNorm(relation_dim),
@@ -220,10 +264,130 @@ class ObjectSpatialAuxHead(nn.Module):
         nn.init.zeros_(self.residual_head[-1].weight)
         nn.init.zeros_(self.residual_head[-1].bias)
 
-    def forward(self, patch_tokens: Tensor) -> dict[str, Tensor]:
+    def predict_heatmaps(self, patch_tokens: Tensor) -> Tensor:
         if patch_tokens.ndim != 4:
             raise ValueError("object spatial aux expects [batch, frames, patches, dim]")
-        heatmap_logits = self.heatmap_head(patch_tokens)
+        return self.heatmap_head(patch_tokens)
+
+    def predict_representation_aux(
+        self, frame_tokens: Tensor, patch_tokens: Tensor
+    ) -> dict[str, Tensor]:
+        """Predict training-only targets without altering event logits."""
+
+        heatmap_logits = self.predict_heatmaps(patch_tokens)
+        result = {"heatmap_logits": heatmap_logits}
+        if not self.relation_aux_enabled:
+            return result
+        if self.relation_head is None or self.context_predictor is None:
+            raise RuntimeError("relation auxiliary modules are missing")
+        if frame_tokens.ndim != 3 or frame_tokens.shape[:2] != patch_tokens.shape[:2]:
+            raise ValueError(
+                "relation auxiliary frame tokens must be [batch,frames,hidden] "
+                "and align with patch tokens"
+            )
+        batch, frames, patches, patch_dim = patch_tokens.shape
+        expected_patches = self.relation_grid_h * self.relation_grid_w
+        if patches != expected_patches:
+            raise ValueError(
+                f"relation patch count={patches} must match grid "
+                f"{self.relation_grid_h}x{self.relation_grid_w}"
+            )
+
+        candidate_count = min(self.relation_topk_candidates, patches)
+        ball_scores = heatmap_logits[..., 0]
+        nms_radius = self.relation_candidate_nms_radius
+        if nms_radius > 0:
+            score_maps = ball_scores.float().reshape(
+                batch * frames, 1, self.relation_grid_h, self.relation_grid_w
+            )
+            local_max = F.max_pool2d(
+                score_maps, kernel_size=2 * nms_radius + 1,
+                stride=1, padding=nms_radius,
+            ).reshape(batch, frames, patches)
+            candidate_scores = ball_scores.float().masked_fill(
+                ball_scores.float() < local_max, float("-inf")
+            )
+        else:
+            candidate_scores = ball_scores.float()
+        candidate_values, candidate_indices = torch.topk(
+            candidate_scores, k=candidate_count, dim=2
+        )
+        candidate_weights = F.softmax(
+            candidate_values / self.temperature, dim=2
+        )
+        candidate_x = (
+            candidate_indices.remainder(self.relation_grid_w).float() + 0.5
+        )
+        candidate_y = (
+            torch.div(
+                candidate_indices,
+                self.relation_grid_w,
+                rounding_mode="floor",
+            ).float()
+            + 0.5
+        )
+        grid_y, grid_x = torch.meshgrid(
+            torch.arange(
+                self.relation_grid_h,
+                device=patch_tokens.device,
+                dtype=torch.float32,
+            )
+            + 0.5,
+            torch.arange(
+                self.relation_grid_w,
+                device=patch_tokens.device,
+                dtype=torch.float32,
+            )
+            + 0.5,
+            indexing="ij",
+        )
+        flat_x = grid_x.flatten().reshape(1, 1, 1, patches)
+        flat_y = grid_y.flatten().reshape(1, 1, 1, patches)
+        distance2 = (
+            flat_x - candidate_x.unsqueeze(-1)
+        ).square() + (
+            flat_y - candidate_y.unsqueeze(-1)
+        ).square()
+        context_targets = []
+        for radius in self.relation_context_radii:
+            spatial_weights = torch.exp(-0.5 * distance2 / (radius * radius))
+            spatial_weights = spatial_weights / spatial_weights.sum(
+                dim=-1, keepdim=True
+            ).clamp_min(1e-8)
+            candidate_context = torch.einsum(
+                "btkp,btpd->btkd",
+                spatial_weights.to(patch_tokens.dtype),
+                patch_tokens,
+            )
+            context_targets.append(
+                torch.einsum(
+                    "btk,btkd->btd",
+                    candidate_weights.to(candidate_context.dtype),
+                    candidate_context,
+                )
+            )
+        stacked_targets = torch.stack(context_targets, dim=2)
+        context_predictions = self.context_predictor(frame_tokens).reshape(
+            batch, frames, len(self.relation_context_radii), patch_dim
+        )
+        entropy = -(
+            candidate_weights.clamp_min(1e-8)
+            * candidate_weights.clamp_min(1e-8).log()
+        ).sum(dim=2) / max(math.log(max(candidate_count, 2)), 1.0)
+        result.update(
+            {
+                "relation_logits": self.relation_head(frame_tokens),
+                "context_predictions": context_predictions,
+                "context_targets": stacked_targets,
+                "candidate_entropy": entropy,
+                "candidate_indices": candidate_indices,
+                "candidate_weights": candidate_weights,
+            }
+        )
+        return result
+
+    def forward(self, patch_tokens: Tensor) -> dict[str, Tensor]:
+        heatmap_logits = self.predict_heatmaps(patch_tokens)
         bsz, frames, patches, _ = heatmap_logits.shape
         topk = min(max(int(math.ceil(patches * self.topk_ratio)), 1), patches)
         per_object_tokens: list[Tensor] = []
@@ -335,4 +499,22 @@ def object_teacher_heatmap_loss(
             outputs.get("object_spatial_residual", logits.new_zeros(())).abs().mean().detach().cpu()
         ),
     }
+    for object_index, object_name in enumerate(OBJECT_NAMES):
+        channel_mask = masks[..., object_index]
+        channel_present = object_present[..., object_index]
+        channel_valid_frames = channel_mask.amax(dim=2) > 0
+        channel_denominator = (channel_present & channel_valid_frames).sum().clamp_min(1)
+        components[f"object_{object_name}_teacher_valid_fraction"] = float(
+            channel_mask.mean().detach().cpu()
+        )
+        components[f"object_{object_name}_positive_frame_fraction"] = float(
+            (channel_present & channel_valid_frames).float().mean().detach().cpu()
+        )
+        components[f"object_{object_name}_top1_hit"] = float(
+            (
+                top_hits[..., object_index]
+                & channel_present
+                & channel_valid_frames
+            ).sum().div(channel_denominator).detach().cpu()
+        )
     return loss, components
