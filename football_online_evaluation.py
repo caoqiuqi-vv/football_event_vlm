@@ -80,6 +80,8 @@ def tune_online_event_thresholds(
     if masks is not None and masks.shape != probs.shape:
         raise ValueError("online threshold masks must match probabilities")
 
+    trusted_videos = {(str(m.get("source", "")), str(m.get("video_id", "")))
+                      for m in metas if m.get("review_trusted_regions")}
     beta_sq = max(float(fbeta_beta), 1e-6) ** 2
     thresholds = np.full(len(labels), 0.5, dtype=np.float32)
     diagnostics: dict[str, Any] = {}
@@ -90,7 +92,7 @@ def tune_online_event_thresholds(
         for row_index, meta in enumerate(metas):
             key = (str(meta.get("source", "")), str(meta.get("video_id", "")))
             video_complete.setdefault(key, True)
-            if masks is not None and float(masks[row_index, class_index]) <= 0.5:
+            if key not in trusted_videos and masks is not None and float(masks[row_index, class_index]) <= 0.5:
                 video_complete[key] = False
         complete_videos = {key for key, complete in video_complete.items() if complete}
         partial_videos = set(video_complete) - complete_videos
@@ -98,12 +100,14 @@ def tune_online_event_thresholds(
             key = (str(meta.get("source", "")), str(meta.get("video_id", "")))
             if key not in complete_videos:
                 continue
-            raw_candidates[key].append(
-                (float(probs[row_index, class_index]), float(candidate_times[row_index, class_index]))
-            )
             anchors = meta.get("online_gt_anchors", ()) or ()
             if len(anchors) == len(labels):
                 video_gt[key].update(round(float(value), 4) for value in anchors[class_index])
+            if key in trusted_videos and masks is not None and float(masks[row_index, class_index]) <= 0.5:
+                continue
+            raw_candidates[key].append(
+                (float(probs[row_index, class_index]), float(candidate_times[row_index, class_index]))
+            )
         video_peaks = {
             key: _nms(values, float(nms_radius_sec))
             for key, values in raw_candidates.items()
@@ -166,7 +170,9 @@ def tune_online_event_thresholds(
             "threshold_candidates": int(len(search_scores)),
             "nms_peaks": int(sum(len(values) for values in video_peaks.values())),
             "support": support,
-            "complete_video_count": len(complete_videos),
+            "complete_video_count": len(complete_videos - trusted_videos),
+            "trusted_region_video_count": len(trusted_videos),
+            "evaluation_scope": "trusted_temporal_regions" if trusted_videos else "complete_videos",
             "partial_video_count": len(partial_videos),
             "partial_video_ids": sorted(key[1] for key in partial_videos),
         }

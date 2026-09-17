@@ -1,0 +1,232 @@
+output_dir: /home/new_users/qiuqi/code/dinov3-main/outputs/football_events/review_clean_e1_e2_20260916/E1
+device: cuda:0
+gpu_ids:
+- 0
+seed: 42
+deterministic: true
+task:
+  label_schema: set_piece
+data:
+  mode: long_videos
+  long_video:
+    roots:
+    - source: xbotgo_0608
+      videos_dir: /mnt/data_16t/football/raw_video_1080P
+      annotations_dir: /home/new_users/qiuqi/code/dinov3-main/outputs/football_review_training/review_e1_e2_20260916
+    split_files:
+      train:
+      - /home/new_users/qiuqi/code/dinov3-main/outputs/football_review_training/review_e1_e2_20260916/train_video_ids.txt
+      val:
+      - /home/new_users/qiuqi/code/dinov3-main/outputs/football_review_training/review_e1_e2_20260916/val_video_ids.txt
+    auto_split:
+      enabled: false
+      val_ratio: 0.2
+      seed: 42
+    negative_ratio: 1.0
+    negative_ratio_by_split:
+      train: 1.0
+      val: 1.0
+    negative_per_video: 0
+    negative_require_all_labels: false
+    negative_min_events_per_label: 4
+    hard_negative:
+      enabled: false
+      manifest: ''
+      min_score: 0.7
+      max_per_video: 20
+      safety_margin_sec: 2.0
+      include_in_val: false
+    review_manifest: /home/new_users/qiuqi/code/dinov3-main/outputs/football_review_training/review_e1_e2_20260916/training_manifest.json
+    review_manifest_sha256: 34a2662ed277442026062e25616d9497f6533900e131bb44f228008fc0069566
+  num_workers_per_gpu: 2
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 1
+  opencv_num_threads: 0
+  cpu_thread_env: 1
+  video_decode_strategy: single_seek_ffmpeg_highres
+  video_reader_cache_size: 2
+  preprocessing:
+    normalize_on_device: true
+video:
+  num_frames: 16
+  clip_duration: 10.0
+  event_margin: 1.0
+  temporal_jitter_sec: 0.0
+  image_size:
+  - 720
+  - 1280
+  hflip_prob: 0.5
+  dual_sampling: aligned
+  positive_window_strategy: centered
+spatial_crop:
+  mode: none
+  index_root: outputs/football_roi_indices/robust_v2
+  require_index: true
+  drop_missing_index_videos: true
+  output_view: roi_only
+  temporal_mode: dynamic
+  dynamic_context_sec: 3.0
+  temporal_smoothing_window_sec: 1.5
+  temporal_max_hold_sec: 1.5
+  temporal_confidence_decay_sec: 1.0
+  temporal_process_noise: 0.01
+  temporal_measurement_noise: 0.1
+  temporal_max_center_jump_ratio: 0.3
+  temporal_causal: false
+  dynamic_fallback_to_clip: true
+  global_image_size:
+  - 720
+  - 1280
+  padding: 0.15
+  min_crop_area_ratio: 0.0
+  max_crop_area_ratio: 0.35
+  min_roi_confidence: 0.4
+  goal_conf: 0.4
+  person_conf: 0.35
+  center_circle_conf: 0.35
+  raw_ball_conf: 0.1
+  min_goal_frames: 3
+  min_ball_points: 3
+  max_people: 10
+  max_cached_videos: 2
+  noise_augmentation:
+    invalid_prob: 0.15
+    ball_drop_prob: 0.1
+    goal_drop_prob: 0.1
+    isolated_false_positive_prob: 0.05
+    center_jitter: 0.08
+    scale_min: 1.0
+    scale_max: 1.0
+model:
+  backbone: dinov3_vitl16
+  init_checkpoint: /home/new_users/qiuqi/code/dinov3-main/outputs/football_events/review_clean_e1_e2_20260916/initial_best.pt
+  weights: /home/new_users/qiuqi/code/dinov3-main/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+  init_checkpoint_strict: true
+  pretrained: true
+  gradient_checkpointing: true
+  freeze_backbone: true
+  freeze_loaded_backbone: false
+  separate_local_backbone: false
+  freeze_global_branch: false
+  finetune_last_blocks: 0
+  frame_feature_dim: 2048
+  temporal_fusion: cls_transformer
+  hidden_dim: 512
+  temporal_layers: 4
+  temporal_heads: 8
+  dropout: 0.1
+  view_fusion: single
+  roi_meta_dim: 16
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_last_blocks: 4
+    target_modules:
+    - attn.qkv
+    - attn.proj
+    train_norm: false
+  view_fusion_layers: 2
+  view_fusion_heads: 8
+  view_fusion_positive_delta: 0.5
+  view_fusion_negative_delta: 2.0
+  backbone_frame_chunk_size: 8
+cache:
+  enabled: false
+  dir: outputs/football_dino_features/vitl16_robust_dual_16f_e1_dynamic_roi_decoupled_lora_d4
+  batch_size: 1
+  rebuild: false
+train:
+  epochs: 2
+  per_gpu_batch_size: 4
+  grad_accum_steps: 20
+  lr_per_gpu: 5.0e-05
+  backbone_lr_per_gpu: 1.0e-05
+  weight_decay: 0.05
+  pos_weight:
+  - 1.0
+  - 2.2269
+  - 1.9647
+  pos_weight_max: 50.0
+  local_loss_weight: 0.0
+  grad_clip_norm: 1.0
+  amp: true
+  amp_dtype: bf16
+  log_interval: 20
+  save_epoch_checkpoints: true
+  checkpoint_selection: online_recall_floor_min_review
+  checkpoint_min_recall: 0.8
+  resume:
+    enabled: false
+    checkpoint: ''
+    strict: true
+    load_optimizer: false
+    load_scheduler: false
+    load_scaler: false
+  frame_det_loss_weight: 0.0
+  frame_det_loss_type: focal_bce
+  frame_heatmap_loss_weight: 0.5
+  frame_mil_loss_weight: 0.3
+  frame_rank_loss_weight: 0.2
+  frame_mil_topk: 3
+  frame_eval_topk: 4
+  frame_rank_pos_threshold: 0.5
+  frame_rank_neg_threshold: 0.05
+  frame_rank_margin: 1.0
+  frame_label_sigma_sec:
+    shot: 0.8
+    save: 0.8
+    set_piece: 1.5
+  frame_label_ignore_radius_sec:
+    shot: 3.0
+    save: 3.0
+    set_piece: 5.0
+  global_backbone_lr_per_gpu: 1.0e-05
+  local_backbone_lr_per_gpu: 1.0e-05
+  roi_quality_loss_weight: 0.0
+  roi_quality_temperature: 0.25
+  positive_retention_loss_weight: 0.0
+  positive_retention_margin: 0.0
+  positive_retention_branch: fused
+  hard_negative_rank_loss_weight: 0.0
+  online_hard_negative_loss_weight: 0.0
+  online_hard_negative_rank_loss_weight: 0.0
+  ddp_find_unused_parameters: true
+  scheduler_epochs: 2
+eval:
+  threshold: 0.5
+  per_gpu_batch_size: 2
+  tuned_min_recall:
+    shot: 0.84
+    save: 0.8
+    set_piece: 0.72
+  candidate_time_mode: window_center
+  online_validation:
+    enabled: true
+    window_stride_sec: 5.0
+    nms_radius_sec: 5.0
+    tolerance_sec: 3.0
+    capped_clip_sec: 10.0
+    score_fusion: clip
+    tune_event_thresholds: true
+    use_for_checkpoint_selection: true
+    tuned_objective_by_class:
+      shot: precision
+      save: precision
+      set_piece: precision
+    tuned_min_recall_by_class:
+      shot: 0.9
+      save: 0.85
+      set_piece: 0.85
+experiment:
+  name: E1
+  initialization: same_historical_best; E2 does not resume E1
+  data_snapshot: 34a2662ed277442026062e25616d9497f6533900e131bb44f228008fc0069566
+  effective_batch: 80
+  evaluation_scope: trusted_temporal_regions
+  only_E1_E2_difference: frame_det_loss_weight
+  physical_gpu: 7
+  original_init_checkpoint: /home/new_users/qiuqi/code/dinov3-main/outputs/football_events/vitl16_d7c_fullimage_latest_split_dino_pretrained_lora_ddp_720p_fromlast_e8_20260829/best.pt
+  init_checkpoint_sha256: c68951b7a616e1a2fe65c63de26cdc2f6e769aea7105c3267e39374dc37ef8b0

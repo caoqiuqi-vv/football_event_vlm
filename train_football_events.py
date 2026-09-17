@@ -313,6 +313,7 @@ class FootballEvent:
     context_start_time: float | None = None
     context_end_time: float | None = None
     is_ignored: bool = False
+    time_supervision: bool = True
 
 
 @dataclass(frozen=True)
@@ -351,6 +352,8 @@ class LongVideoRecord:
     online_pair_id: str = ""
     online_pair_role: str = ""
     online_pair_class_mask: tuple[float, ...] = ()
+    review_manifest_path: str = ""
+    review_fixed_window: bool = False
 
     @property
     def cache_key(self) -> str:
@@ -1098,6 +1101,9 @@ def apply_dataset_level_save_cohort_weights(
 
 
 def load_long_video_records(cfg: Any, split: str) -> tuple[list[LongVideoRecord], dict[tuple[str, str], list[FootballEvent]]]:
+    if cfg.data.long_video.get("review_manifest"):
+        from football_review_data import load_records
+        return load_records(cfg, split, training=sys.modules[__name__])
     lv_cfg = cfg.data.long_video
     clip_duration = float(cfg.video.get("clip_duration", 9.0))
     seed = int(cfg.get("seed", 42)) + stable_int(split)
@@ -1829,7 +1835,7 @@ def gaussian_frame_targets(
     masks = torch.zeros_like(targets)
     events_by_label: dict[str, list[float]] = {label: [] for label in LABELS}
     for event in events:
-        if event.is_ignored or not (start_sec <= float(event.anchor_time) <= end_sec):
+        if event.is_ignored or not event.time_supervision or not (start_sec <= float(event.anchor_time) <= end_sec):
             continue
         for label_index, value in enumerate(event.labels):
             if float(value) > 0:
@@ -1898,6 +1904,7 @@ def jitter_frame_supervision_events(
                 context_start_time=event.context_start_time,
                 context_end_time=event.context_end_time,
                 is_ignored=event.is_ignored,
+                time_supervision=event.time_supervision,
             )
         )
     return jittered
@@ -2422,7 +2429,28 @@ def read_video_segment(
         else is_train and random.random() < hflip_prob
     )
 
-    decoded_frames = _decode_video_frames(cap, indices, decode_strategy)
+    if decode_strategy == "single_seek_ffmpeg_highres":
+        high_resolution = (
+            cap.get(cv2.CAP_PROP_FRAME_WIDTH) > 1920
+            or cap.get(cv2.CAP_PROP_FRAME_HEIGHT) > 1080
+        )
+        if high_resolution:
+            if crop_provider is not None or detection_hint_renderer is not None:
+                raise ValueError("FFmpeg high-resolution sampling requires full-image input")
+            from football_ffmpeg_decode import decode_timestamp_frames
+            deadline = getattr(_decode_deadline, "deadline", None)
+            timeout = 45.0 if deadline is None else min(45.0, deadline - time.monotonic())
+            check_decode_deadline()
+            try:
+                decoded_frames, frame_times = decode_timestamp_frames(
+                    path, indices, fps, image_size, timeout_sec=timeout
+                )
+            except Exception as exc:
+                raise VideoDecodeError(f"ffmpeg high-resolution decode: {exc}") from exc
+        else:
+            decoded_frames = _decode_video_frames(cap, indices, "single_seek")
+    else:
+        decoded_frames = _decode_video_frames(cap, indices, decode_strategy)
     try:
         _ensure_usable_decode(decoded_frames, path=path)
     except Exception:
@@ -3116,6 +3144,8 @@ class FootballLongVideoDataset(Dataset):
         return width, height, fps, frame_count
 
     def _sample_window(self, record: LongVideoRecord, events: Sequence[FootballEvent]) -> tuple[float, float]:
+        if record.review_fixed_window:
+            return record.base_clip_start, record.base_clip_end
         max_start = max(record.video_duration - self.clip_duration, 0.0)
         # Online-simulation records already encode deliberate central and edge
         # windows in base_clip_start. Re-applying anchor jitter here silently
@@ -3319,11 +3349,19 @@ class FootballLongVideoDataset(Dataset):
             self.sampling_duration,
             jitter_sec=(self.sampling_temporal_jitter_sec if self.is_train else 0.0),
         )
+        if record.review_fixed_window:
+            start, end = context_start, context_end
         labels = labels_for_window(events, start, end)
         label_mask = label_mask_for_sample(record.label_mask, labels)
         label_mask = rejected_set_piece_label_mask(
             events, start, end, labels, label_mask, self.raw_rejected_ignore_margin_sec
         )
+        review_frame_class_mask = None
+        if record.review_manifest_path:
+            from football_review_data import policy_for_record, window_supervision
+            labels, label_mask, review_frame_class_mask = window_supervision(
+                policy_for_record(record), start, end, temporal_evaluation=not self.is_train
+            )
         set_piece_subtype_targets = set_piece_subtypes_for_window(
             events, start, end
         )
@@ -3742,6 +3780,10 @@ class FootballLongVideoDataset(Dataset):
             result["frame_times"] = frame_times
             result["frame_targets"] = frame_targets
             result["frame_target_masks"] = frame_target_masks
+            if review_frame_class_mask is not None:
+                class_mask = torch.tensor(review_frame_class_mask, dtype=torch.float32)
+                result["frame_target_masks"] *= class_mask.reshape(1, -1)
+                result["frame_label_masks"] = class_mask
             context_span_mask, context_span_row_mask = set_piece_context_span_mask(
                 events,
                 start,
@@ -3903,6 +3945,10 @@ def football_collate(batch: list[dict[str, Any]]) -> dict[str, Any]:
         result["frame_targets"] = torch.stack([item["frame_targets"] for item in batch], dim=0)
     if "frame_target_masks" in batch[0]:
         result["frame_target_masks"] = torch.stack([item["frame_target_masks"] for item in batch], dim=0)
+    if any("frame_label_masks" in item for item in batch):
+        result["frame_label_masks"] = torch.stack(
+            [item.get("frame_label_masks", item["label_masks"]) for item in batch], dim=0
+        )
     if "set_piece_subtype_targets" in batch[0]:
         result["set_piece_subtype_targets"] = torch.stack(
             [item["set_piece_subtype_targets"] for item in batch], dim=0
@@ -15017,6 +15063,8 @@ def frame_detection_loss(outputs: dict[str, Tensor], batch: dict[str, Any], cfg:
     masks = batch["frame_target_masks"].to(device, non_blocking=True)
     clip_targets = batch["targets"].to(device, non_blocking=True)
     label_masks = batch["label_masks"].to(device, non_blocking=True)
+    if "frame_label_masks" in batch:
+        label_masks = label_masks * batch["frame_label_masks"].to(device, non_blocking=True)
     sample_loss_weights = batch.get("sample_loss_weights")
     if sample_loss_weights is not None:
         sample_loss_weights = sample_loss_weights.to(device, non_blocking=True)
@@ -15484,15 +15532,20 @@ def online_event_metrics(
         start = float(meta.get("sampled_clip_start", meta.get("base_clip_start", 0.0)))
         end = float(meta.get("sampled_clip_end", meta.get("base_clip_end", start)))
         video_duration[video] = max(video_duration[video], end)
-        if bool((probs[row_index] >= thresholds).any()):
+        valid = (masks[row_index] > 0.5) if masks is not None and meta.get("review_trusted_regions") else np.ones(len(LABELS), dtype=bool)
+        if bool(((probs[row_index] >= thresholds) & valid).any()):
             raw_intervals[video].append((start, end))
+    trusted_videos = {
+        (str(meta.get("source", "")), str(meta["video_id"]))
+        for meta in metas if meta.get("review_trusted_regions")
+    }
     for label_index, label in enumerate(LABELS):
         tp = fp = fn = predictions_after_nms = 0
         support = 0
         partial_known_tp = partial_known_support = 0
         partial_predictions_after_nms = 0
         video_complete = {
-            video: all(
+            video: video in trusted_videos or all(
                 masks is None or float(masks[index, label_index]) > 0.5
                 for index, meta in enumerate(metas)
                 if (str(meta.get("source", "")), str(meta["video_id"])) == video
@@ -15521,6 +15574,8 @@ def online_event_metrics(
                 anchors = metas[index].get("online_gt_anchors", ()) or ()
                 if len(anchors) == len(LABELS):
                     gt_values.update(round(float(value), 4) for value in anchors[label_index])
+                if video in trusted_videos and masks is not None and float(masks[index, label_index]) <= 0.5:
+                    continue
                 score = float(probs[index, label_index])
                 if score >= float(thresholds[label_index]):
                     candidates.append((score, float(candidate_times[index, label_index])))
@@ -15602,7 +15657,18 @@ def online_event_metrics(
             "fp": fp,
             "fn": fn,
             "support": support,
-            "complete_video_count": int(sum(video_complete.values())),
+            "complete_video_count": sum(complete and video not in trusted_videos for video, complete in video_complete.items()),
+            "trusted_region_video_count": len(trusted_videos),
+            "evaluation_scope": "trusted_temporal_regions" if trusted_videos else "complete_videos",
+            "evaluated_minutes": sum(
+                _merge_time_intervals([
+                    (float(meta.get("sampled_clip_start", meta.get("base_clip_start", 0.0))),
+                     float(meta.get("sampled_clip_end", meta.get("base_clip_end", 0.0))))
+                    for index, meta in enumerate(metas)
+                    if (str(meta.get("source", "")), str(meta["video_id"])) == video
+                    and (masks is None or float(masks[index, label_index]) > 0.5)
+                ]) for video in videos
+            ) / 60.0,
             "partial_video_count": int(len(videos) - sum(video_complete.values())),
             "partial_video_ids": sorted(
                 video[1] for video, complete in video_complete.items() if not complete
@@ -15974,6 +16040,7 @@ def evaluate(
                 "sampled_clip_start": float(meta.get("sampled_clip_start", 0.0)),
                 "sampled_clip_end": float(meta.get("sampled_clip_end", 0.0)),
                 "online_gt_anchors": meta.get("online_gt_anchors", ()),
+                "review_trusted_regions": bool(meta.get("review_manifest_path")),
             }
             for meta in batch["meta"]
         )
@@ -20512,7 +20579,7 @@ def build_online_validation_records(
     dense_records: list[LongVideoRecord] = []
     for key in sorted(templates):
         template = templates[key]
-        events = [event for event in events_by_video.get(key, ()) if not event.is_ignored]
+        events = [event for event in events_by_video.get(key, ()) if not event.is_ignored and event.time_supervision]
         anchors = tuple(
             tuple(sorted({float(event.anchor_time) for event in events if event.labels[index] > 0.5}))
             for index in range(len(LABELS))
@@ -20550,6 +20617,8 @@ def build_online_validation_records(
                     online_chunk_mode="validation_grid",
                     online_window_index=window_index,
                     online_gt_anchors=anchors,
+                    review_manifest_path=template.review_manifest_path,
+                    review_fixed_window=bool(template.review_manifest_path),
                 )
             )
     return dense_records
